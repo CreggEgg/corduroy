@@ -79,7 +79,7 @@ where
         })
 }
 
-fn ident_parser<'a, I>() -> impl Parser<'a, I, Spanned<String>, extra::Err<ParserError<'a>>>
+fn ident_parser<'a, I>() -> impl Parser<'a, I, Spanned<String>, extra::Err<ParserError<'a>>> + Clone
 where
     I: ValueInput<'a, Token = Token<'a>, Span = Span>,
 {
@@ -98,34 +98,64 @@ where
         let literal = {
             let mapping = select! {
                 Token::Int(x) => UntypedLiteral::Int(x.parse::<i64>().unwrap()),
+                Token::String(x) => UntypedLiteral::String(x[1..x.len() - 1].to_string()),
             };
+            //
+            let function_literal = annotated_ident()
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
+                .then_ignore(just(Token::Arrow))
+                .then(
+                    expr.clone()
+                        .separated_by(just(Token::Semicolon))
+                        .collect::<Vec<_>>()
+                        .delimited_by(just(Token::LeftCurly), just(Token::RightCurly)),
+                )
+                .map(|(arguments, body)| UntypedLiteral::Function { arguments, body });
 
+            // let unit_literal = just(Token::LeftBrace)
+            //     .ignored()
+            //     .then_ignore(just(Token::RightBrace))
+            //     .map(|_| UntypedLiteral::Unit);
+            // mapping.or(function_literal)
             // let function_literal = annotated_ident()
             //     .separated_by(just(Token::Comma))
-            //     .collect::<Vec<_>>()
-            //     .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
-            //     .then_ignore(just(Token::Arrow))
-            //     .then(
-            //         expr.separated_by(just(Token::Semicolon))
-            //             .collect::<Vec<_>>()
-            //             .delimited_by(just(Token::LeftCurly), just(Token::RightCurly)),
-            //     )
-            //     .map(|(arguments, body)| UntypedLiteral::Function { arguments, body });
-            mapping //.or(function_literal)
+            //     .then(expr.clone().repeated())
+            //     .map(|_| UntypedLiteral::Unit);
+            choice((function_literal /* , unit_literal */, mapping))
         }
         .map(UntypedExpression::Literal);
 
-        choice((literal,)).map_with(|t, e| (t, e.span()))
+        let ident = ident_parser().map(|ident| UntypedExpression::Ident(ident.0));
+
+        let function_expression = expr
+            .clone()
+            .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
+            .or(ident_parser().map(|(ident, span)| (UntypedExpression::Ident(ident), span)));
+
+        let function_call = function_expression
+            .then(
+                expr.separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
+            )
+            .map(|(function, arguments)| UntypedExpression::FunctionCall {
+                function: Box::new(function), //Box::new((UntypedExpression::Ident(function.0), function.1)),
+                arguments,
+            });
+
+        choice((literal, function_call, ident)).map_with(|t, e| (t, e.span()))
     })
 }
 
-fn annotated_ident<'a, I>() -> impl Parser<'a, I, UntypedAnnotatedIdent, extra::Err<ParserError<'a>>>
+fn annotated_ident<'a, I>()
+-> impl Parser<'a, I, UntypedAnnotatedIdent, extra::Err<ParserError<'a>>> + Clone
 where
     I: ValueInput<'a, Token = Token<'a>, Span = Span>,
 {
     ident_parser()
-        .then_ignore(just(Token::Colon))
-        .then(ident_parser())
+        .then(just(Token::Colon).ignore_then(ident_parser()).or_not())
         .map(|(lhs, rhs)| UntypedAnnotatedIdent {
             ident: lhs,
             annotation: rhs,

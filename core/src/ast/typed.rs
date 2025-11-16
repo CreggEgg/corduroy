@@ -1,4 +1,86 @@
-use crate::Spanned;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::{Scope, Spanned, inference::TypeVariables};
+
+static TYPE_VARIABLE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+impl Type {
+    pub fn new_type_variable() -> Self {
+        Self::TypeVariable(TYPE_VARIABLE_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+
+    pub fn resolve_comparsion(
+        &self,
+        other: &Self,
+        scope: &mut Scope<Type>,
+        type_variables: &mut TypeVariables,
+    ) -> bool {
+        match (self, other) {
+            (
+                Type::Function { args, return_type },
+                Type::Function {
+                    args: args2,
+                    return_type: return_type2,
+                },
+            ) => {
+                if args.len() != args2.len() {
+                    return false;
+                };
+                if !return_type.resolve_comparsion(&return_type2, scope, type_variables) {
+                    return false;
+                }
+                args.iter().enumerate().all(|(idx, argument)| {
+                    argument.resolve_comparsion(&args2[idx], scope, type_variables)
+                })
+            }
+            (Type::Int, Type::Int) => true,
+            (Type::Float, Type::Float) => true,
+            (Type::String, Type::String) => true,
+            (Type::Unit, Type::Unit) => true,
+            (Type::Boolean, Type::Boolean) => true,
+            (Type::TypeVariable(id), Type::Function { args, return_type })
+            | (Type::Function { args, return_type }, Type::TypeVariable(id)) => {
+                type_variables.insert(
+                    *id,
+                    Type::Function {
+                        args: args.clone(),
+                        return_type: return_type.clone(),
+                    },
+                );
+                true
+            }
+            (Type::TypeVariable(id), Type::Int) | (Type::Int, Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::Int);
+                true
+            }
+            (Type::TypeVariable(id), Type::Float) | (Type::Float, Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::Float);
+                true
+            }
+            (Type::TypeVariable(id), Type::String) | (Type::String, Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::String);
+                true
+            }
+            (Type::TypeVariable(id), Type::Unit) | (Type::Unit, Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::Unit);
+                true
+            }
+            (Type::TypeVariable(id), Type::Boolean) | (Type::Boolean, Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::Boolean);
+                true
+            }
+            (Type::TypeVariable(id), Type::TypeVariable(id2)) => id == id2,
+            _ => false,
+        }
+    }
+
+    pub fn try_get_function_return_type(&self) -> Option<Type> {
+        let Type::Function { return_type, .. } = self else {
+            return None;
+        };
+        Some(*return_type.clone())
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type {
@@ -11,6 +93,7 @@ pub enum Type {
     String,
     Unit,
     Boolean,
+    TypeVariable(usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -45,6 +128,7 @@ pub enum Expression {
         arguments: Vec<Spanned<TypedExpression>>,
     },
     Literal(Literal),
+    Ident(String),
 }
 
 #[derive(PartialEq, Debug, Clone)]
