@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Scope, Spanned,
+    Scope, Span, Spanned,
     ast::{
         typed::{AnnotatedIdent, Definition, Expression, File, Literal, Type, TypedExpression},
         untyped::{
@@ -11,39 +11,144 @@ use crate::{
     },
 };
 
-pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope<Type>) -> File {
+pub type TypeVariables = HashMap<usize, Type>;
+
+#[derive(Debug, PartialEq)]
+pub enum TypeError {
+    IncorrectType {
+        expected: Type,
+        got: Type,
+        span: Span,
+    },
+    Undefined {
+        ident: String,
+        span: Span,
+    },
+}
+
+pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope<Type>) -> Result<File, TypeError> {
+    let mut type_variables: TypeVariables = HashMap::new();
     let definitions = untyped_ast
         .definitions
         .drain(0..)
-        .map(|(definition, span)| (infer_definition(definition, &mut scope), span.to_owned()));
-    File {
-        definitions: definitions.collect::<Vec<_>>(),
-    }
+        .map(|(definition, span)| {
+            Ok((
+                infer_definition(definition, &mut scope, &mut type_variables)?,
+                span.to_owned(),
+            ))
+        });
+    Ok(File {
+        definitions: definitions.collect::<Result<Vec<_>, TypeError>>()?,
+    })
 }
 
-fn infer_definition(definiton: UntypedDefinition, scope: &mut Scope<Type>) -> Definition {
+fn infer_definition(
+    definiton: UntypedDefinition,
+    scope: &mut Scope<Type>,
+    type_variables: &mut TypeVariables,
+) -> Result<Definition, TypeError> {
     let UntypedDefinition {
         lhs,
         rhs: (rhs, rhs_span),
     } = definiton;
-    Definition {
+    Ok(Definition {
         lhs,
-        rhs: (infer_expr(rhs, scope), rhs_span),
-    }
+        rhs: (
+            infer_expr(
+                rhs,
+                scope,
+                &Type::new_type_variable(),
+                type_variables,
+                rhs_span,
+            )?,
+            rhs_span,
+        ),
+    })
 }
-fn infer_expr(expression: UntypedExpression, scope: &mut Scope<Type>) -> TypedExpression {
-    match expression {
+fn infer_expr(
+    expression: UntypedExpression,
+    scope: &mut Scope<Type>,
+    expected_evaluates_to: &Type,
+    type_variables: &mut TypeVariables,
+    span: Span,
+) -> Result<TypedExpression, TypeError> {
+    let typed_expression = match expression {
         UntypedExpression::FunctionCall {
             function,
-            arguments,
-        } => todo!(),
-        UntypedExpression::Literal(literal) => infer_literal(literal, scope),
-        UntypedExpression::Ident(_) => todo!(),
+            mut arguments,
+        } => {
+            let arguments = arguments
+                .drain(0..)
+                .map(|(argument, span)| {
+                    Ok((
+                        infer_expr(
+                            argument,
+                            scope,
+                            &Type::new_type_variable(),
+                            type_variables,
+                            span,
+                        )?,
+                        span,
+                    ))
+                })
+                .collect::<Result<Vec<Spanned<TypedExpression>>, TypeError>>()?;
+            let (function, function_span) = *function;
+            let expected = Type::Function {
+                args: arguments
+                    .clone()
+                    .drain(0..)
+                    .map(|(expr, _)| expr.evaluates_to)
+                    .collect::<Vec<_>>(), // TODO - THIS IS SO ICKY
+                return_type: Box::new(expected_evaluates_to.clone()),
+            };
+
+            let function_type =
+                infer_expr(function, scope, &expected, type_variables, function_span)?;
+            if !function_type
+                .evaluates_to
+                .resolve_comparsion(&expected, scope, type_variables)
+            {
+                return Err(TypeError::IncorrectType {
+                    expected,
+                    got: function_type.evaluates_to,
+                    span: function_span,
+                });
+            }
+
+            let return_type = function_type
+                    .evaluates_to
+                    .try_get_function_return_type()
+                    .unwrap()/* We can unwrap here because resolve comparison ensures it is a function */;
+
+            Ok(TypedExpression::new(
+                Expression::FunctionCall {
+                    function: Box::new((function_type, function_span)),
+                    arguments,
+                },
+                return_type,
+            ))
+        }
+        UntypedExpression::Literal(literal) => infer_literal(literal, scope, type_variables),
+        UntypedExpression::Ident(ident) => Ok(TypedExpression::new(
+            Expression::Ident(ident.clone()),
+            scope
+                .get(&ident)
+                .ok_or(TypeError::Undefined { ident, span })?
+                .clone(),
+        )),
+    }?;
+    if let Type::TypeVariable(id) = expected_evaluates_to {
+        type_variables.insert(*id, typed_expression.evaluates_to.clone());
     }
+    Ok(typed_expression)
 }
 
-fn infer_literal(literal: UntypedLiteral, scope: &mut Scope<Type>) -> TypedExpression {
-    match literal {
+fn infer_literal(
+    literal: UntypedLiteral,
+    scope: &mut Scope<Type>,
+    type_variables: &mut TypeVariables,
+) -> Result<TypedExpression, TypeError> {
+    Ok(match literal {
         UntypedLiteral::String(string) => {
             TypedExpression::new(Expression::Literal(Literal::String(string)), Type::String)
         }
@@ -60,15 +165,18 @@ fn infer_literal(literal: UntypedLiteral, scope: &mut Scope<Type>) -> TypedExpre
             Expression::Literal(Literal::Boolean(boolean)),
             Type::Boolean,
         ),
-        UntypedLiteral::Function { arguments, body } => infer_function(arguments, body, scope),
-    }
+        UntypedLiteral::Function { arguments, body } => {
+            infer_function(arguments, body, scope, type_variables)?
+        }
+    })
 }
 
 fn infer_function(
     mut arguments: Vec<UntypedAnnotatedIdent>,
     mut body: Vec<Spanned<UntypedExpression>>,
     scope: &mut Scope<Type>,
-) -> TypedExpression {
+    type_variables: &mut TypeVariables,
+) -> Result<TypedExpression, TypeError> {
     let arguments = arguments
         .drain(0..)
         .map(|argument| infer_annotated_ident(argument, scope))
@@ -80,18 +188,42 @@ fn infer_function(
 
     let body = body
         .drain(0..)
-        .map(|(expression, span)| (infer_expr(expression, &mut internal_scope), span))
-        .collect::<Vec<_>>();
+        .map(|(expression, span)| {
+            Ok((
+                infer_expr(
+                    expression,
+                    &mut internal_scope,
+                    &Type::new_type_variable(),
+                    type_variables,
+                    span,
+                )?,
+                span,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let return_type = body
         .last()
         .map(|(last_expression, _)| last_expression.evaluates_to.clone())
         .unwrap_or(Type::Unit);
 
-    TypedExpression::new(
+    let argument_types = arguments
+        .iter()
+        .map(
+            |AnnotatedIdent {
+                 annotation: (annotation, _),
+                 ..
+             }| { annotation.clone() },
+        )
+        .collect();
+
+    Ok(TypedExpression::new(
         Expression::Literal(Literal::Function { arguments, body }),
-        return_type,
-    )
+        Type::Function {
+            args: argument_types,
+            return_type: Box::new(return_type),
+        },
+    ))
 }
 
 fn infer_annotated_ident(

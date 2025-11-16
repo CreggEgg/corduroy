@@ -30,7 +30,7 @@ impl Default for UntypedExpression {
 #[derive(PartialEq, Debug, Clone)]
 pub struct UntypedAnnotatedIdent {
     pub ident: Spanned<String>,
-    pub annotation: Spanned<String>,
+    pub annotation: Option<Spanned<String>>,
 }
 #[derive(PartialEq, Debug, Clone)]
 pub enum UntypedLiteral {
