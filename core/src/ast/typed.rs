@@ -1,20 +1,19 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Scope, Spanned, inference::TypeVariables};
+use crate::{Spanned, inference::TypeVariables};
 
 static TYPE_VARIABLE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl Type {
+    pub fn reset_type_variable_counter() {
+        TYPE_VARIABLE_COUNTER.fetch_min(0, Ordering::SeqCst);
+    }
+
     pub fn new_type_variable() -> Self {
         Self::TypeVariable(TYPE_VARIABLE_COUNTER.fetch_add(1, Ordering::SeqCst))
     }
 
-    pub fn resolve_comparsion(
-        &self,
-        other: &Self,
-        scope: &mut Scope<Type>,
-        type_variables: &mut TypeVariables,
-    ) -> bool {
+    pub fn resolve_comparsion(&self, other: &Self, type_variables: &mut TypeVariables) -> bool {
         match (self, other) {
             (
                 Type::Function { args, return_type },
@@ -26,12 +25,12 @@ impl Type {
                 if args.len() != args2.len() {
                     return false;
                 };
-                if !return_type.resolve_comparsion(&return_type2, scope, type_variables) {
+                if !return_type.resolve_comparsion(return_type2, type_variables) {
                     return false;
                 }
-                args.iter().enumerate().all(|(idx, argument)| {
-                    argument.resolve_comparsion(&args2[idx], scope, type_variables)
-                })
+                args.iter()
+                    .enumerate()
+                    .all(|(idx, argument)| argument.resolve_comparsion(&args2[idx], type_variables))
             }
             (Type::Int, Type::Int) => true,
             (Type::Float, Type::Float) => true,
@@ -79,6 +78,25 @@ impl Type {
             return None;
         };
         Some(*return_type.clone())
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            Type::Function { args, return_type } => format!(
+                "({}) -> {}",
+                args.iter()
+                    .map(|arg| arg.display())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                return_type.display()
+            ),
+            Type::Int => "int".into(),
+            Type::Float => "float".into(),
+            Type::String => "string".into(),
+            Type::Unit => "()".into(),
+            Type::Boolean => "bool".into(),
+            Type::TypeVariable(id) => format!("'{id}"),
+        }
     }
 }
 

@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+use ast::{
+    parser::{self, ParseError},
+    untyped::UntypedFile,
+};
 use chumsky::span::SimpleSpan;
 
 pub mod ast;
@@ -10,19 +14,25 @@ pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
 pub type Scope<T> = HashMap<String, T>;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+pub fn parse_file(file: &str) -> Result<UntypedFile, ParseError> {
+    let tokens = tokens::tokenize(file);
+
+    let ast = parser::parse(tokens, file.len());
+    ast
 }
-const SIMPLE_PROGRAM: &str = r#"
+
+#[allow(unused)]
+mod example_programs {
+    pub const SIMPLE_PROGRAM: &str = r#"
 main = 1
 "#;
-const STARTER_PROGRAM: &str = r#"
+    pub const STARTER_PROGRAM: &str = r#"
 main = () -> {
 println("hello world")
 } 
 "#;
 
-const EXAMPLE_PROGRAM: &str = r#"
+    pub const EXAMPLE_PROGRAM: &str = r#"
 main = () -> {
     println("hello world");
     let my_string = "hi there";
@@ -33,18 +43,27 @@ creates_reference = (x: string) -> {
     println(x);
 }
 "#;
-const FUNCTION_WITH_ARGUMENTS: &str = r#"
-main = () -> {
-    add(5, 10)
-}
+    pub const FUNCTION_WITH_ARGUMENTS: &str = r#"
 add = (a, b: int) -> {
     a
 }
+main = () -> {
+    add(5, 10)
+}
 "#;
+    pub const BINARY_OP: &str = r#"
+add = (a, b) -> {
+    a + b
+}
+main = () -> {
+    add(5, 10)
+}
+"#;
+}
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::{assert_eq, assert_ne};
+    use example_programs::*;
 
     use super::*;
 
@@ -56,10 +75,10 @@ mod tests {
     }
 
     mod untyped {
+        use crate::example_programs::*;
         use crate::{
-            FUNCTION_WITH_ARGUMENTS, SIMPLE_PROGRAM, STARTER_PROGRAM,
             ast::{
-                self, parser,
+                parser,
                 untyped::{
                     UntypedAnnotatedIdent, UntypedDefinition, UntypedExpression, UntypedFile,
                     UntypedLiteral,
@@ -67,7 +86,7 @@ mod tests {
             },
             tokens,
         };
-        use pretty_assertions::{assert_eq, assert_ne};
+        use pretty_assertions::assert_eq;
 
         #[test]
         fn simple_parse() {
@@ -143,7 +162,32 @@ mod tests {
                     definitions: vec![
                         (
                             UntypedDefinition {
-                                lhs: ("main".into(), (1..5).into()),
+                                lhs: ("add".into(), (1..4).into()),
+                                rhs: (
+                                    UntypedExpression::Literal(UntypedLiteral::Function {
+                                        arguments: vec![
+                                            (UntypedAnnotatedIdent {
+                                                ident: ("a".into(), (8..9).into()),
+                                                annotation: None
+                                            }),
+                                            (UntypedAnnotatedIdent {
+                                                ident: ("b".into(), (11..12).into()),
+                                                annotation: Some(("int".into(), (14..17).into()))
+                                            })
+                                        ],
+                                        body: vec![(
+                                            UntypedExpression::Ident("a".into()),
+                                            (28..29).into()
+                                        )]
+                                    }),
+                                    (7..31).into()
+                                )
+                            },
+                            (1..31).into()
+                        ),
+                        (
+                            UntypedDefinition {
+                                lhs: ("main".into(), (32..36).into()),
                                 rhs: (
                                     UntypedExpression::Literal(UntypedLiteral::Function {
                                         arguments: vec![],
@@ -151,78 +195,67 @@ mod tests {
                                             UntypedExpression::FunctionCall {
                                                 function: Box::new((
                                                     UntypedExpression::Ident("add".into()),
-                                                    (20..23).into()
+                                                    (51..54).into()
                                                 )),
                                                 arguments: vec![
                                                     (
                                                         UntypedExpression::Literal(
                                                             UntypedLiteral::Int(5)
                                                         ),
-                                                        (24..25).into()
+                                                        (55..56).into()
                                                     ),
                                                     (
                                                         UntypedExpression::Literal(
                                                             UntypedLiteral::Int(10)
                                                         ),
-                                                        (27..29).into()
+                                                        (58..60).into()
                                                     )
                                                 ]
                                             },
-                                            (20..30).into()
-                                        )]
-                                    }),
-                                    (8..32).into()
-                                )
-                            },
-                            (1..32).into()
-                        ),
-                        (
-                            UntypedDefinition {
-                                lhs: ("add".into(), (33..36).into()),
-                                rhs: (
-                                    UntypedExpression::Literal(UntypedLiteral::Function {
-                                        arguments: vec![
-                                            (UntypedAnnotatedIdent {
-                                                ident: ("a".into(), (40..41).into()),
-                                                annotation: None
-                                            }),
-                                            (UntypedAnnotatedIdent {
-                                                ident: ("b".into(), (43..44).into()),
-                                                annotation: Some(("int".into(), (46..49).into()))
-                                            })
-                                        ],
-                                        body: vec![(
-                                            UntypedExpression::Ident("a".into()),
-                                            (60..61).into()
+                                            (51..61).into()
                                         )]
                                     }),
                                     (39..63).into()
                                 )
                             },
-                            (33..63).into()
-                        )
+                            (32..63).into()
+                        ),
                     ]
                 }
             )
         }
+
+        #[test]
+        fn parse_binary_op() {
+            let tokens = tokens::tokenize(BINARY_OP);
+
+            let ast = parser::parse(tokens, BINARY_OP.len()).unwrap();
+
+            assert_eq!(
+                ast,
+                UntypedFile {
+                    definitions: todo!()
+                }
+            );
+        }
     }
 
     mod typed {
-        use pretty_assertions::{assert_eq, assert_ne};
+        use crate::{ast::typed::AnnotatedIdent, example_programs::*};
+        use pretty_assertions::assert_eq;
         use std::collections::HashMap;
 
         use crate::{
-            SIMPLE_PROGRAM, STARTER_PROGRAM,
             ast::{
                 parser,
                 typed::{Definition, Expression, File, Literal, Type, TypedExpression},
             },
-            inference::{self, TypeError},
-            tokens,
+            inference, tokens,
         };
 
         #[test]
         fn simple_infer() {
+            Type::reset_type_variable_counter();
             let tokens = tokens::tokenize(SIMPLE_PROGRAM);
 
             let ast = parser::parse(tokens, SIMPLE_PROGRAM.len()).unwrap();
@@ -251,6 +284,7 @@ mod tests {
 
         #[test]
         fn hello_world_infer() {
+            Type::reset_type_variable_counter();
             let tokens = tokens::tokenize(STARTER_PROGRAM);
 
             let ast = parser::parse(tokens, STARTER_PROGRAM.len()).unwrap();
@@ -315,6 +349,135 @@ mod tests {
                         },
                         (1..40).into()
                     )]
+                }
+            )
+        }
+        #[test]
+        fn arguments_infer() {
+            Type::reset_type_variable_counter();
+            let tokens = tokens::tokenize(FUNCTION_WITH_ARGUMENTS);
+
+            let ast = parser::parse(tokens, FUNCTION_WITH_ARGUMENTS.len()).unwrap();
+
+            let inferred = inference::infer_ast(
+                ast,
+                HashMap::from([
+                    ("int".into(), Type::Int),
+                    (
+                        "println".into(),
+                        Type::Function {
+                            args: vec![Type::String],
+                            return_type: Box::new(Type::Unit),
+                        },
+                    ),
+                ]),
+            )
+            .unwrap();
+            dbg!(&inferred);
+
+            assert_eq!(
+                inferred,
+                File {
+                    definitions: vec![
+                        (
+                            Definition {
+                                lhs: ("add".into(), (1..4).into()),
+                                rhs: (
+                                    TypedExpression::new(
+                                        Expression::Literal(Literal::Function {
+                                            arguments: vec![
+                                                AnnotatedIdent {
+                                                    ident: ("a".into(), (8..9).into()),
+                                                    annotation: (
+                                                        Type::TypeVariable(0),
+                                                        (8..9).into()
+                                                    ),
+                                                },
+                                                AnnotatedIdent {
+                                                    ident: ("b".into(), (11..12).into()),
+                                                    annotation: (Type::Int, (14..17).into()),
+                                                },
+                                            ],
+                                            body: vec![(
+                                                TypedExpression::new(
+                                                    Expression::Ident("a".into()),
+                                                    Type::TypeVariable(0),
+                                                ),
+                                                (28..29).into(),
+                                            ),],
+                                        },),
+                                        Type::Function {
+                                            args: vec![Type::TypeVariable(0,), Type::Int,],
+                                            return_type: Box::new(Type::TypeVariable(0,)),
+                                        },
+                                    ),
+                                    (7..31).into()
+                                ),
+                            },
+                            (1..31).into(),
+                        ),
+                        (
+                            Definition {
+                                lhs: ("main".into(), (32..36).into()),
+                                rhs: (
+                                    TypedExpression::new(
+                                        Expression::Literal(Literal::Function {
+                                            arguments: vec![],
+                                            body: vec![(
+                                                TypedExpression::new(
+                                                    Expression::FunctionCall {
+                                                        function: Box::new((
+                                                            TypedExpression::new(
+                                                                Expression::Ident("add".into()),
+                                                                Type::Function {
+                                                                    args: vec![
+                                                                        Type::Int,
+                                                                        Type::Int,
+                                                                    ],
+                                                                    return_type: Box::new(
+                                                                        Type::Int
+                                                                    ),
+                                                                },
+                                                            ),
+                                                            (51..54).into(),
+                                                        )),
+                                                        arguments: vec![
+                                                            (
+                                                                TypedExpression::new(
+                                                                    Expression::Literal(
+                                                                        Literal::Int(5,),
+                                                                    ),
+                                                                    Type::Int,
+                                                                ),
+                                                                (55..56).into(),
+                                                            ),
+                                                            (
+                                                                TypedExpression::new(
+                                                                    Expression::Literal(
+                                                                        Literal::Int(10,),
+                                                                    ),
+                                                                    Type::Int,
+                                                                ),
+                                                                (58..60).into(),
+                                                            ),
+                                                        ],
+                                                    },
+                                                    Type::Int,
+                                                ),
+                                                (51..61).into(),
+                                            ),],
+                                        },),
+                                        Type::Function {
+                                            args: vec![],
+                                            return_type: Box::new(Type::Int)
+                                        },
+                                    ),
+                                    (39..63).into(),
+                                ),
+                            },
+                            (32..63).into(),
+                        ),
+                    ],
                 }
             )
         }

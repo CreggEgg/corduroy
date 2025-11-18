@@ -1,9 +1,9 @@
 use chumsky::{
     IterParser, Parser,
-    error::{EmptyErr, Simple},
+    error::Simple,
     extra,
     input::{Input, Stream, ValueInput},
-    prelude::{any, choice, just, recursive},
+    prelude::{choice, just, recursive},
     select,
 };
 
@@ -44,7 +44,7 @@ where
     file_parser()
         .parse(token_stream)
         .into_result()
-        .map_err(|err| ParseError::EmptyErr(err))
+        .map_err(ParseError::EmptyErr)
 }
 
 fn file_parser<'a, I>() -> impl Parser<'a, I, UntypedFile, extra::Err<ParserError<'a>>>
