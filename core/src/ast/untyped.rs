@@ -19,6 +19,39 @@ pub enum UntypedExpression {
     },
     Literal(UntypedLiteral),
     Ident(String),
+    BinaryExpression {
+        lhs: Box<Spanned<UntypedExpression>>,
+        operator: BinaryOperator,
+        rhs: Box<Spanned<UntypedExpression>>,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BinaryOperator {
+    AddInt,
+    MultiplyInt,
+    DivideInt,
+    SubtractInt,
+    AddFloat,
+    MultiplyFloat,
+    DivideFloat,
+    SubtractFloat,
+}
+
+impl BinaryOperator {
+    pub fn display(&self) -> String {
+        (match self {
+            BinaryOperator::AddInt => "+",
+            BinaryOperator::MultiplyInt => "*",
+            BinaryOperator::DivideInt => "/",
+            BinaryOperator::SubtractInt => "-",
+            BinaryOperator::AddFloat => "+.",
+            BinaryOperator::MultiplyFloat => "*.",
+            BinaryOperator::DivideFloat => "/.",
+            BinaryOperator::SubtractFloat => "-.",
+        })
+        .to_string()
+    }
 }
 
 impl Default for UntypedExpression {

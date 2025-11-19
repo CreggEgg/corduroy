@@ -34,6 +34,14 @@ pub enum TypeError {
         expected: usize,
         got: usize,
     },
+    MismatchedBinaryExpression {
+        lhs: Type,
+        lhs_span: chumsky::prelude::SimpleSpan,
+        rhs: Type,
+        rhs_span: chumsky::prelude::SimpleSpan,
+        operator: crate::ast::untyped::BinaryOperator,
+        operator_expectation: Type,
+    },
 }
 
 pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope<Type>) -> Result<File, TypeError> {
@@ -188,6 +196,57 @@ fn infer_expr(
                 .ok_or(TypeError::Undefined { ident, span })?
                 .clone(),
         )),
+        UntypedExpression::BinaryExpression { lhs, operator, rhs } => {
+            let (lhs, lhs_span) = *lhs;
+            let (rhs, rhs_span) = *rhs;
+            let (expected, typed_operator) = {
+                use crate::ast::typed::BinaryOperator::*;
+                use Type::*;
+                match operator {
+                    crate::ast::untyped::BinaryOperator::AddInt => (Int, Add),
+                    crate::ast::untyped::BinaryOperator::MultiplyInt => (Int, Multiply),
+                    crate::ast::untyped::BinaryOperator::DivideInt => (Int, Divide),
+                    crate::ast::untyped::BinaryOperator::SubtractInt => (Int, Subtract),
+                    crate::ast::untyped::BinaryOperator::AddFloat => (Float, Add),
+                    crate::ast::untyped::BinaryOperator::MultiplyFloat => (Float, Multiply),
+                    crate::ast::untyped::BinaryOperator::DivideFloat => (Float, Divide),
+                    crate::ast::untyped::BinaryOperator::SubtractFloat => (Float, Subtract),
+                }
+            };
+            let lhs = infer_expr(lhs, scope, &expected, type_variables, lhs_span)?;
+            let rhs = infer_expr(rhs, scope, &expected, type_variables, rhs_span)?;
+            if !(lhs
+                .evaluates_to
+                .resolve_comparsion(&expected, type_variables)
+                && rhs
+                    .evaluates_to
+                    .resolve_comparsion(&expected, type_variables))
+            {
+                let mut lhs = lhs;
+                let mut rhs = rhs;
+                lhs.evaluates_to
+                    .substitute_type_variables(type_variables, &mut Vec::new());
+                rhs.evaluates_to
+                    .substitute_type_variables(type_variables, &mut Vec::new());
+                Err(TypeError::MismatchedBinaryExpression {
+                    lhs: lhs.evaluates_to,
+                    lhs_span,
+                    rhs: rhs.evaluates_to,
+                    rhs_span,
+                    operator,
+                    operator_expectation: expected,
+                })
+            } else {
+                Ok(TypedExpression::new(
+                    Expression::BinaryExpression {
+                        lhs: Box::new((lhs, lhs_span)),
+                        operator: typed_operator,
+                        rhs: Box::new((rhs, rhs_span)),
+                    },
+                    expected,
+                ))
+            }
+        }
     }?;
     if let Type::TypeVariable(id) = expected_evaluates_to {
         type_variables.insert(*id, typed_expression.evaluates_to.clone());
@@ -340,8 +399,17 @@ impl TypedExpression {
                 }
                 _ => {}
             },
-
             Expression::Ident(_) => {}
+            Expression::BinaryExpression {
+                lhs,
+                operator: _,
+                rhs,
+            } => {
+                lhs.0
+                    .substitute_type_variables(type_variables, used_type_variables);
+                rhs.0
+                    .substitute_type_variables(type_variables, used_type_variables);
+            }
         }
     }
 }

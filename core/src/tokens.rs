@@ -21,7 +21,6 @@ pub struct TokenError(pub Range<usize>);
 #[logos(skip r"[ \t\n\f]+")]
 pub enum Token<'a> {
     Error,
-
     #[token(",")]
     Comma,
     #[token("(")]
@@ -40,6 +39,22 @@ pub enum Token<'a> {
     DefineEqual,
     #[token("==")]
     EqualComparison,
+    #[token("+")]
+    AddInt,
+    #[token("+.")]
+    AddFloat,
+    #[token("*")]
+    MultiplyInt,
+    #[token("*.")]
+    MultiplyFloat,
+    #[token("-")]
+    SubtractInt,
+    #[token("-.")]
+    SubtractFloat,
+    #[token("/")]
+    DivideInt,
+    #[token("/.")]
+    DivideFloat,
     #[token("->")]
     Arrow,
     #[token("let")]

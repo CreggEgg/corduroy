@@ -52,11 +52,11 @@ main = () -> {
 }
 "#;
     pub const BINARY_OP: &str = r#"
-add = (a, b) -> {
-    a + b
+my_cool_function = (a, b, c) -> {
+    a + b * c
 }
 main = () -> {
-    add(5, 10)
+    my_cool_function(5, 10, 3)
 }
 "#;
 }
@@ -75,6 +75,7 @@ mod tests {
     }
 
     mod untyped {
+        use crate::ast::untyped::BinaryOperator;
         use crate::example_programs::*;
         use crate::{
             ast::{
@@ -234,14 +235,111 @@ mod tests {
             assert_eq!(
                 ast,
                 UntypedFile {
-                    definitions: todo!()
+                    definitions: vec![
+                        (
+                            UntypedDefinition {
+                                lhs: ("my_cool_function".into(), (1..17).into()),
+                                rhs: (
+                                    UntypedExpression::Literal(UntypedLiteral::Function {
+                                        arguments: vec![
+                                            (UntypedAnnotatedIdent {
+                                                ident: ("a".into(), (21..22).into()),
+                                                annotation: None
+                                            }),
+                                            (UntypedAnnotatedIdent {
+                                                ident: ("b".into(), (24..25).into()),
+                                                annotation: None
+                                            }),
+                                            (UntypedAnnotatedIdent {
+                                                ident: ("c".into(), (27..28).into()),
+                                                annotation: None
+                                            })
+                                        ],
+                                        body: vec![(
+                                            UntypedExpression::BinaryExpression {
+                                                lhs: Box::new((
+                                                    UntypedExpression::Ident("a".into()),
+                                                    (39..40).into()
+                                                )),
+                                                operator: BinaryOperator::AddInt,
+                                                rhs: Box::new((
+                                                    UntypedExpression::BinaryExpression {
+                                                        lhs: Box::new((
+                                                            UntypedExpression::Ident("b".into()),
+                                                            (43..44).into()
+                                                        )),
+                                                        operator: BinaryOperator::MultiplyInt,
+                                                        rhs: Box::new((
+                                                            UntypedExpression::Ident("c".into()),
+                                                            (47..48).into()
+                                                        ))
+                                                    },
+                                                    (43..48).into()
+                                                ))
+                                            },
+                                            // UntypedExpression::Ident("a".into()),
+                                            (39..48).into()
+                                        )]
+                                    }),
+                                    (20..50).into()
+                                )
+                            },
+                            (1..50).into()
+                        ),
+                        (
+                            UntypedDefinition {
+                                lhs: ("main".into(), (51..55).into()),
+                                rhs: (
+                                    UntypedExpression::Literal(UntypedLiteral::Function {
+                                        arguments: vec![],
+                                        body: vec![(
+                                            UntypedExpression::FunctionCall {
+                                                function: Box::new((
+                                                    UntypedExpression::Ident(
+                                                        "my_cool_function".into()
+                                                    ),
+                                                    (70..86).into()
+                                                )),
+                                                arguments: vec![
+                                                    (
+                                                        UntypedExpression::Literal(
+                                                            UntypedLiteral::Int(5)
+                                                        ),
+                                                        (87..88).into()
+                                                    ),
+                                                    (
+                                                        UntypedExpression::Literal(
+                                                            UntypedLiteral::Int(10)
+                                                        ),
+                                                        (90..92).into()
+                                                    ),
+                                                    (
+                                                        UntypedExpression::Literal(
+                                                            UntypedLiteral::Int(3)
+                                                        ),
+                                                        (94..95).into()
+                                                    )
+                                                ]
+                                            },
+                                            (70..96).into()
+                                        )]
+                                    }),
+                                    (58..98).into()
+                                )
+                            },
+                            (51..98).into()
+                        ),
+                    ]
                 }
             );
         }
     }
 
     mod typed {
-        use crate::{ast::typed::AnnotatedIdent, example_programs::*};
+        use crate::{
+            ast::typed::{AnnotatedIdent, BinaryOperator},
+            example_programs::*,
+        };
         use pretty_assertions::assert_eq;
         use std::collections::HashMap;
 
@@ -476,6 +574,175 @@ mod tests {
                                 ),
                             },
                             (32..63).into(),
+                        ),
+                    ],
+                }
+            )
+        }
+
+        #[test]
+        fn binary_op_infer() {
+            let tokens = tokens::tokenize(BINARY_OP);
+
+            let ast = parser::parse(tokens, BINARY_OP.len()).unwrap();
+
+            let inferred = inference::infer_ast(
+                ast,
+                HashMap::from([
+                    ("int".into(), Type::Int),
+                    (
+                        "println".into(),
+                        Type::Function {
+                            args: vec![Type::String],
+                            return_type: Box::new(Type::Unit),
+                        },
+                    ),
+                ]),
+            )
+            .unwrap();
+
+            dbg!(&inferred);
+            assert_eq!(
+                inferred,
+                File {
+                    definitions: vec![
+                        (
+                            Definition {
+                                lhs: ("my_cool_function".into(), (1..17).into()),
+                                rhs: (
+                                    TypedExpression {
+                                        expression: Expression::Literal(Literal::Function {
+                                            arguments: vec![
+                                                AnnotatedIdent {
+                                                    ident: ("a".into(), (21..22).into()),
+                                                    annotation: (Type::Int, (21..22).into()),
+                                                },
+                                                AnnotatedIdent {
+                                                    ident: ("b".into(), (24..25).into()),
+                                                    annotation: (Type::Int, (24..25).into(),),
+                                                },
+                                                AnnotatedIdent {
+                                                    ident: ("c".into(), (27..28).into()),
+                                                    annotation: (Type::Int, (27..28).into()),
+                                                },
+                                            ],
+                                            body: vec![(
+                                                TypedExpression {
+                                                    expression: Expression::BinaryExpression {
+                                                        lhs: Box::new((
+                                                            TypedExpression {
+                                                                expression: Expression::Ident(
+                                                                    "a".into()
+                                                                ),
+                                                                evaluates_to: Type::Int,
+                                                            },
+                                                            (39..40).into(),
+                                                        )),
+                                                        operator: BinaryOperator::Add,
+                                                        rhs: Box::new((
+                                                            TypedExpression {
+                                                                expression:
+                                                                    Expression::BinaryExpression {
+                                                                        lhs: Box::new((
+                                                                            TypedExpression {
+                                                                                expression: Expression::Ident(
+                                                                                    "b".into(),
+                                                                                ),
+                                                                                evaluates_to: Type::Int,
+                                                                            },
+                                                                            (43..44).into(),
+                                                                        )),
+                                                                        operator: BinaryOperator::Multiply,
+                                                                        rhs: Box::new((
+                                                                            TypedExpression {
+                                                                                expression: Expression::Ident(
+                                                                                    "c".into(),
+                                                                                ),
+                                                                                evaluates_to: Type::Int,
+                                                                            },
+                                                                            (47..48).into(),
+                                                                        )),
+                                                                    },
+                                                                evaluates_to: Type::Int,
+                                                            },
+                                                            (43..48).into(),
+                                                        )),
+                                                    },
+                                                    evaluates_to: Type::Int,
+                                                },
+                                                (39..48).into(),
+                                            ),],
+                                        },),
+                                        evaluates_to: Type::Function {
+                                            args: vec![Type::Int, Type::Int, Type::Int,],
+                                            return_type: Box::new(Type::Int),
+                                        },
+                                    },
+                                    (20..50).into(),
+                                ),
+                            },
+                            (1..50).into(),
+                        ),
+                        (
+                            Definition {
+                                lhs: ("main".into(), (51..55).into()),
+                                rhs: (
+                                    TypedExpression {
+                                        expression: Expression::Literal(Literal::Function {
+                                            arguments: vec![],
+                                            body: vec![(
+                                                TypedExpression {
+                                                    expression: Expression::FunctionCall {
+                                                        function: Box::new((
+                                                            TypedExpression {
+                                                                expression: Expression::Ident(
+                                                                    "my_cool_function".into(),
+                                                                ),
+                                                                evaluates_to: Type::Function {
+                                                                    args: vec![Type::Int, Type::Int, Type::Int,],
+                                                                    return_type: Box::new(Type::Int),
+                                                                },
+                                                            },
+                                                            (70..86).into(),
+                                                        )),
+                                                        arguments: vec![
+                                                            (
+                                                                TypedExpression {
+                                                                    expression: Expression::Literal(Literal::Int(5,),),
+                                                                    evaluates_to: Type::Int,
+                                                                },
+                                                                (87..88).into(),
+                                                            ),
+                                                            (
+                                                                TypedExpression {
+                                                                    expression: Expression::Literal(Literal::Int(10,),),
+                                                                    evaluates_to: Type::Int,
+                                                                },
+                                                                (90..92).into(),
+                                                            ),
+                                                            (
+                                                                TypedExpression {
+                                                                    expression: Expression::Literal(Literal::Int(3,),),
+                                                                    evaluates_to: Type::Int,
+                                                                },
+                                                                (94..95).into(),
+                                                            ),
+                                                        ],
+                                                    },
+                                                    evaluates_to: Type::Int,
+                                                },
+                                                (70..96).into(),
+                                            ),],
+                                        },),
+                                        evaluates_to: Type::Function {
+                                            args: vec![],
+                                            return_type: Box::new(Type::Int),
+                                        },
+                                    },
+                                    (58..98).into(),
+                                ),
+                            },
+                            (51..98).into(),
                         ),
                     ],
                 }

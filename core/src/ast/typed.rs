@@ -147,6 +147,19 @@ pub enum Expression {
     },
     Literal(Literal),
     Ident(String),
+    BinaryExpression {
+        lhs: Box<Spanned<TypedExpression>>,
+        operator: BinaryOperator,
+        rhs: Box<Spanned<TypedExpression>>,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BinaryOperator {
+    Add,
+    Multiply,
+    Divide,
+    Subtract,
 }
 
 #[derive(PartialEq, Debug, Clone)]
