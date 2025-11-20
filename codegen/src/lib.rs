@@ -10,43 +10,38 @@ use inkwell::{
     execution_engine::ExecutionEngine,
     module::{Linkage, Module},
     targets::{InitializationConfig, Target, TargetTriple},
-    values::FunctionValue,
+    values::{FunctionValue, IntValue},
 };
 
 struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    scope: Scope<RuntimeValue<'ctx>>
+    scope: Scope<RuntimeValue<'ctx>>,
 }
 
+#[derive(Clone)]
 enum RuntimeValue<'a> {
-    Value(),
+    Value(IntValue<'a>),
     Function(FunctionValue<'a>),
 }
 
 pub fn compile(file: &File) {
     let context = Context::create();
     let module = context.create_module("main");
-    let mut codegen = CodeGen {
-        context: &context,
-        module,
-        builder: context.create_builder(),
-        scope: HashMap::new()
-    };
+    let mut scope: Scope<RuntimeValue> = HashMap::new();
+
+    let builder = context.create_builder();
 
     let int = context.i64_type();
 
     let main_type = int.fn_type(&[], false);
-    let function = codegen
-        .module
-        .add_function("main", main_type, Some(Linkage::External));
+    let function = module.add_function("main", main_type, Some(Linkage::External));
 
-    let basic_block = codegen.context.append_basic_block(function, "entry");
-    codegen.builder.position_at_end(basic_block);
+    let basic_block = context.append_basic_block(function, "entry");
+    builder.position_at_end(basic_block);
 
     let mut functions = Vec::new();
-
 
     for definition in &file.definitions {
         let expr = &definition.0.rhs.0;
@@ -59,24 +54,29 @@ pub fn compile(file: &File) {
                     }),
                 ..
             } => {
-                functions.push((
-                    definition.0.lhs.0.clone(),
-                    arguments,
-                    body,
-                    expr.evaluates_to.clone(),
-                ));
+                let name = definition.0.lhs.0.clone();
+                let return_type = expr.evaluates_to.clone();
+                functions.push((name, arguments, body, return_type));
             }
             _ => {
-                let value = codegen.compile_expr(expr);
-                codegen.scope.insert(definition.0.lhs.0.clone(), value);
+                let name = definition.0.lhs.0.clone();
+                let value = compile_expr(expr, &mut scope);
+                scope.insert(name, value);
             }
         }
     }
-
     for (name, arguments, body, return_type) in functions {
-        let function =
-            codegen.compile_function(name.clone(), arguments, body, return_type);
-        codegen.scope.insert(name, RuntimeValue::Function(function));
+        let function = compile_function(
+            name.clone(),
+            arguments,
+            body,
+            return_type,
+            builder,
+            &mut scope,
+            &context,
+            &mut module,
+        );
+        scope.insert(name, RuntimeValue::Function(function));
     }
 
     // let x = function.get_nth_param(0).unwrap().into_int_value();
@@ -112,52 +112,74 @@ pub fn compile(file: &File) {
             Path::new("./out.o"),
         )
         .unwrap();
-
-    // codegen.module.write("./out.o");
 }
 
-impl CodeGen<'_> {
-    fn compile_expr(
-        &mut self,
-        expr: &core::ast::typed::TypedExpression,
-    ) -> RuntimeValue {
-        todo!()
+fn compile_function<'a>(
+    name: String,
+    arguments: &'a [AnnotatedIdent],
+    body: &'a [Spanned<TypedExpression>],
+    return_type: Type,
+    builder: Builder<'_>,
+    scope: &mut HashMap<String, RuntimeValue<'_>>,
+    context: &'a Context,
+    module: &'a mut Module<'a>,
+) -> FunctionValue<'a> {
+    let int = context.i64_type();
+    let float = context.f64_type();
+
+    let args = arguments
+        .iter()
+        .map(|argument| match argument.annotation.0 {
+            Type::Float => float.into(),
+            _ => int.into(),
+        })
+        .collect::<Vec<_>>();
+
+    let fn_type = match return_type {
+        Type::Float => float.fn_type(&args, false),
+        _ => int.fn_type(&args, false),
+    };
+
+    let function = module.add_function(&name, fn_type, Some(Linkage::External));
+
+    let basic_block = context.append_basic_block(function, "entry");
+    builder.position_at_end(basic_block);
+
+    for (expression, _) in body {
+        compile_expr(expression, scope);
     }
 
-    fn compile_function(
-        &mut self,
-        name: String,
-        arguments: &[AnnotatedIdent],
-        body: &[Spanned<TypedExpression>],
-        return_type: Type,
-    ) -> FunctionValue {
-        let int = self.context.i64_type();
-        let float = self.context.f64_type();
+    function
+}
 
-        let args = arguments
-            .iter()
-            .map(|argument| match argument.annotation.0 {
-                Type::Float => float.into(),
-                _ => int.into(),
-            })
-            .collect::<Vec<_>>();
+fn compile_expr<'a>(
+    expression: &'a TypedExpression,
+    scope: &'a mut Scope<RuntimeValue>,
+    builder: Builder<'_>,
+    context: &'a Context,
+) -> RuntimeValue<'a> {
+    match &expression.expression {
+        core::ast::typed::Expression::FunctionCall {
+            function,
+            arguments,
+        } => todo!(),
+        core::ast::typed::Expression::Literal(literal) => match literal {
+            core::ast::typed::Literal::String(_) => todo!(),
+            core::ast::typed::Literal::Int(x) => {
+                RuntimeValue::Value(context.i64_type().const_int(*x as u64, true))
+            }
 
-        let fn_type = match return_type {
-            Type::Float => float.fn_type(&args, false),
-            _ => int.fn_type(&args, false),
-        };
-
-        let function = self
-            .module
-            .add_function(&name, fn_type, Some(Linkage::External)).;
-
-        let basic_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(basic_block);
-
-        for (expression, _) in body {
-            self.compile_expr(expression, scope)
-        }
-
-        function
+            core::ast::typed::Literal::Float(x) => {
+                let inner_value = context.i64_type().const_int(*x);
+                RuntimeValue::Value(inner_value)
+            }
+            core::ast::typed::Literal::Unit => todo!(),
+            core::ast::typed::Literal::Boolean(_) => todo!(),
+            core::ast::typed::Literal::Function { arguments, body } => todo!(),
+        },
+        core::ast::typed::Expression::Ident(ident) => scope.get(ident).unwrap().clone(),
+        core::ast::typed::Expression::BinaryExpression { lhs, operator, rhs } => todo!(),
     }
 }
+
+// codegen.module.write("./out.o");
