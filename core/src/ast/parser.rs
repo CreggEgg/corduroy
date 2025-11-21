@@ -1,6 +1,6 @@
 use chumsky::{
     IterParser, Parser,
-    error::Simple,
+    error::{Rich, Simple},
     extra,
     input::{Input, Stream, ValueInput},
     prelude::{choice, just, recursive},
@@ -14,7 +14,7 @@ use super::untyped::{
     UntypedLiteral,
 };
 
-type ParserError<'a> = Simple<'a, Token<'a>>;
+type ParserError<'a> = Rich<'a, Token<'a>>;
 
 #[derive(Debug)]
 pub enum ParseError<'a> {
@@ -148,56 +148,54 @@ where
 
         let atom = choice((literal, function_call, ident)).map_with(|t, e| (t, e.span()));
 
-        let product = atom
-            .clone()
-            .then(
-                choice((
-                    just(Token::MultiplyInt).map(|_| BinaryOperator::MultiplyInt),
-                    just(Token::MultiplyFloat).map(|_| BinaryOperator::MultiplyFloat),
-                    just(Token::DivideInt).map(|_| BinaryOperator::DivideInt),
-                    just(Token::DivideFloat).map(|_| BinaryOperator::DivideFloat),
-                ))
-                .then(atom.clone())
-                .or_not(),
-            )
-            .map_with(|(lhs, rhs), e| {
+        let product = atom.clone().foldl_with(
+            choice((
+                just(Token::MultiplyInt).map(|_| BinaryOperator::MultiplyInt),
+                just(Token::MultiplyFloat).map(|_| BinaryOperator::MultiplyFloat),
+                just(Token::DivideInt).map(|_| BinaryOperator::DivideInt),
+                just(Token::DivideFloat).map(|_| BinaryOperator::DivideFloat),
+            ))
+            .then(atom.clone())
+            .repeated(),
+            |lhs, (op, rhs), e| {
                 (
-                    match rhs {
-                        Some((op, rhs)) => UntypedExpression::BinaryExpression {
-                            lhs: Box::new(lhs),
-                            operator: op,
-                            rhs: Box::new(rhs),
-                        },
-                        None => lhs.0,
+                    UntypedExpression::BinaryExpression {
+                        lhs: Box::new(lhs),
+                        operator: op,
+                        rhs: Box::new(rhs),
+                    },
+                    // match rhs {
+                    //     Some((op, rhs)) => UntypedExpression::BinaryExpression {
+                    //         lhs: Box::new(lhs),
+                    //         operator: op,
+                    //         rhs: Box::new(rhs),
+                    //     },
+                    //     None => lhs.0,
+                    // },
+                    e.span(),
+                )
+            },
+        );
+        let sum = product.clone().foldl_with(
+            choice((
+                just(Token::AddInt).map(|_| BinaryOperator::AddInt),
+                just(Token::AddFloat).map(|_| BinaryOperator::AddFloat),
+                just(Token::SubtractInt).map(|_| BinaryOperator::SubtractInt),
+                just(Token::SubtractFloat).map(|_| BinaryOperator::SubtractFloat),
+            ))
+            .then(product.clone())
+            .repeated(),
+            |lhs, (op, rhs), e| {
+                (
+                    UntypedExpression::BinaryExpression {
+                        lhs: Box::new(lhs),
+                        operator: op,
+                        rhs: Box::new(rhs),
                     },
                     e.span(),
                 )
-            });
-        let sum = product
-            .clone()
-            .then(
-                choice((
-                    just(Token::AddInt).map(|_| BinaryOperator::AddInt),
-                    just(Token::AddFloat).map(|_| BinaryOperator::AddFloat),
-                    just(Token::SubtractInt).map(|_| BinaryOperator::SubtractInt),
-                    just(Token::SubtractFloat).map(|_| BinaryOperator::SubtractFloat),
-                ))
-                .then(product.clone())
-                .or_not(),
-            )
-            .map_with(|(lhs, rhs), e| {
-                (
-                    match rhs {
-                        Some((op, rhs)) => UntypedExpression::BinaryExpression {
-                            lhs: Box::new(lhs),
-                            operator: op,
-                            rhs: Box::new(rhs),
-                        },
-                        None => lhs.0,
-                    },
-                    e.span(),
-                )
-            });
+            },
+        );
         sum
     })
 }

@@ -1,6 +1,11 @@
 #include "stdio.h"
-extern int add(int, int);
+extern int printint(int);
 
-int main() {
-	printf("%d", add(5, 5));
+int printint(int x) {
+	printf("%d", x);
 }
+
+int println(char *str) {
+	printf("%s", str);
+}
+

@@ -1,5 +1,10 @@
 use core::{ast::typed::Type, inference, parse_file};
-use std::{collections::HashMap, fs, process::exit};
+use std::{
+    collections::HashMap,
+    fs,
+    os::unix::process::CommandExt,
+    process::{Command, exit},
+};
 
 use ariadne::{ColorGenerator, Label, Report, Source};
 use clap::Parser;
@@ -29,7 +34,7 @@ fn main() {
                     .with_label(
                         Label::new((args.file.clone(), error.span().into_range()))
                             .with_color(ariadne::Color::Red)
-                            .with_message(error.to_string()),
+                            .with_message(error.reason().to_string()),
                     )
                     .finish()
                     .print((args.file.clone(), Source::from(&file_content)))
@@ -47,6 +52,13 @@ fn main() {
                 "println".into(),
                 Type::Function {
                     args: vec![Type::String],
+                    return_type: Box::new(Type::Unit),
+                },
+            ),
+            (
+                "printint".into(),
+                Type::Function {
+                    args: vec![Type::Int],
                     return_type: Box::new(Type::Unit),
                 },
             ),
@@ -138,5 +150,21 @@ fn main() {
         },
     };
 
-    compile(&inferred);
+    let compiled_object = compile(&inferred);
+    let _ = fs::create_dir("./tmp-corduroy-build/");
+    fs::write("./tmp-corduroy-build/main.o", compiled_object).unwrap();
+    fs::write(
+        "./tmp-corduroy-build/std.c",
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/test.c")),
+    )
+    .unwrap();
+
+    Command::new("gcc")
+        .args(["./tmp-corduroy-build/main.o", "./tmp-corduroy-build/std.c"])
+        .spawn()
+        .unwrap()
+        .wait()
+        .unwrap();
+
+    fs::remove_dir_all("./tmp-corduroy-build/").unwrap();
 }

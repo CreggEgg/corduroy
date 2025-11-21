@@ -1,6 +1,7 @@
-add = (a, b: int) -> {
-    a + b
+add = (a, b, c) -> {
+	a + b + c
 }
+
 main = () -> {
-    add(5, 10) + add(5, 10)
+	println("hi world")
 }
