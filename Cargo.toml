@@ -1,2 +1,2 @@
 [workspace]
-members = [ "cli", "codegen","core"]
+members = [ "codegen","core"]
