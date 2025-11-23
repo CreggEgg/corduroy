@@ -1,3 +1,4 @@
+#[allow(unused)]
 pub mod mir;
 pub mod parser;
 pub mod typed;

@@ -34,6 +34,10 @@ pub enum Token<'a> {
     LeftCurly,
     #[token("}")]
     RightCurly,
+    #[token("[")]
+    LeftSquare,
+    #[token("]")]
+    RightSquare,
     #[token(";")]
     Semicolon,
     #[token(":")]
@@ -68,6 +72,8 @@ pub enum Token<'a> {
     String(&'a str),
     #[regex("[0-9]+")]
     Int(&'a str),
+    #[regex("mut")]
+    Mut,
 }
 
 impl Display for Token<'_> {
@@ -99,7 +105,10 @@ impl Display for Token<'_> {
                 f.write_str(data)?;
                 f.write_char('"')
             }
-            Token::Int(int) => f.write_str(&format!("{}", int)),
+            Token::Int(int) => f.write_str(int.as_ref()),
+            Token::LeftSquare => f.write_char('['),
+            Token::RightSquare => f.write_char(']'),
+            Token::Mut => f.write_str("mut"),
         }
     }
 }

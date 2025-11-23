@@ -1,23 +1,36 @@
-use std::{
-    any::type_name,
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
-
-use chumsky::container::Container;
+use std::collections::HashMap;
 
 use crate::{
-    Scope, Span, Spanned,
+    Span, Spanned,
     ast::{
-        typed::{AnnotatedIdent, Definition, Expression, File, Literal, Type, TypedExpression},
+        typed::{
+            AnnotatedIdent, Definition, Expression, File, LValue, Literal, Type, TypedExpression,
+        },
         untyped::{
             UntypedAnnotatedIdent, UntypedDefinition, UntypedExpression, UntypedFile,
-            UntypedLiteral,
+            UntypedLValue, UntypedLiteral,
         },
     },
 };
 
 pub type TypeVariables = HashMap<usize, Type>;
+
+#[derive(Clone)]
+pub struct InferenceMetadata<T> {
+    pub inner: T,
+    pub definition_type: DefinitionType,
+}
+
+#[derive(Clone)]
+pub enum DefinitionType {
+    TopLevel(Span),
+    MutableLocal(Span),
+    Immutable(Span),
+    CompilerProvided,
+    Argument(Span),
+}
+
+type Scope = crate::Scope<InferenceMetadata<Type>>;
 
 #[derive(Debug, PartialEq)]
 pub enum TypeError {
@@ -36,15 +49,27 @@ pub enum TypeError {
     },
     MismatchedBinaryExpression {
         lhs: Type,
-        lhs_span: chumsky::prelude::SimpleSpan,
+        lhs_span: Span,
         rhs: Type,
-        rhs_span: chumsky::prelude::SimpleSpan,
+        rhs_span: Span,
         operator: crate::ast::untyped::BinaryOperator,
         operator_expectation: Type,
     },
+    CannotMutate {
+        target_span: Span,
+        immutable_reason: ImmutableReason,
+    },
 }
 
-pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope<Type>) -> Result<File, TypeError> {
+#[derive(Debug, PartialEq)]
+pub enum ImmutableReason {
+    TopLevel,
+    NotDeclaredAsMutable,
+    Argument,
+    CompilerProvided,
+}
+
+pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope) -> Result<File, Box<TypeError>> {
     let definitions = untyped_ast
         .definitions
         .drain(0..)
@@ -59,15 +84,15 @@ pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope<Type>) -> Result
         });
 
     Ok(File {
-        definitions: definitions.collect::<Result<Vec<_>, TypeError>>()?,
+        definitions: definitions.collect::<Result<Vec<_>, Box<TypeError>>>()?,
     })
 }
 
 fn infer_definition(
     definiton: UntypedDefinition,
-    scope: &mut Scope<Type>,
+    scope: &mut Scope,
     type_variables: &mut TypeVariables,
-) -> Result<Definition, TypeError> {
+) -> Result<Definition, Box<TypeError>> {
     let UntypedDefinition {
         lhs,
         rhs: (rhs, rhs_span),
@@ -79,7 +104,16 @@ fn infer_definition(
         type_variables,
         rhs_span,
     )?;
-    scope.insert(lhs.0.clone(), rhs.evaluates_to.clone());
+    scope.insert(
+        lhs.0.clone(),
+        InferenceMetadata {
+            inner: rhs.evaluates_to.clone(),
+            definition_type: DefinitionType::TopLevel({
+                use chumsky::span::Span;
+                (lhs.1.start()..rhs_span.end()).into()
+            }),
+        },
+    );
     Ok(Definition {
         lhs,
         rhs: (rhs, rhs_span),
@@ -87,11 +121,11 @@ fn infer_definition(
 }
 fn infer_expr(
     expression: UntypedExpression,
-    scope: &mut Scope<Type>,
+    scope: &mut Scope,
     expected_evaluates_to: &Type,
     type_variables: &mut TypeVariables,
     span: Span,
-) -> Result<TypedExpression, TypeError> {
+) -> Result<TypedExpression, Box<TypeError>> {
     let typed_expression = match expression {
         UntypedExpression::FunctionCall {
             function,
@@ -110,24 +144,23 @@ fn infer_expr(
                 ref return_type,
             } = function_type.evaluates_to
             else {
-                return Err(TypeError::IncorrectType {
+                return Err(Box::new(TypeError::IncorrectType {
                     expected: Type::Function {
                         args: (0..arguments.len())
-                            .into_iter()
                             .map(|_| Type::new_type_variable())
                             .collect(),
                         return_type: Box::new(expected_evaluates_to.clone()),
                     },
                     got: function_type.evaluates_to,
                     span: function_span,
-                });
+                }));
             };
 
             if arguments.len() != expected_arguments.len() {
-                return Err(TypeError::WrongNumberOfArguments {
+                return Err(Box::new(TypeError::WrongNumberOfArguments {
                     expected: expected_arguments.len(),
                     got: arguments.len(),
-                });
+                }));
             };
 
             let arguments = arguments
@@ -147,14 +180,14 @@ fn infer_expr(
                     {
                         Ok((inferred, span))
                     } else {
-                        Err(TypeError::IncorrectType {
+                        Err(Box::new(TypeError::IncorrectType {
                             expected: expected_arguments[idx].clone(),
                             got: inferred.evaluates_to,
                             span,
-                        })
+                        }))
                     }
                 })
-                .collect::<Result<Vec<Spanned<TypedExpression>>, TypeError>>()?;
+                .collect::<Result<Vec<Spanned<TypedExpression>>, Box<TypeError>>>()?;
             // let expected = Type::Function {
             //     args: arguments
             //         .clone()
@@ -193,13 +226,13 @@ fn infer_expr(
             Expression::Ident(ident.clone()),
             scope
                 .get(&ident)
-                .ok_or(TypeError::Undefined { ident, span })?
-                .clone(),
+                .map(|value| value.inner.clone())
+                .ok_or(TypeError::Undefined { ident, span })?,
         )),
         UntypedExpression::BinaryExpression { lhs, operator, rhs } => {
             let (lhs, lhs_span) = *lhs;
             let (rhs, rhs_span) = *rhs;
-            let (expected, typed_operator) = {
+            let (expected_operand_type, typed_operator) = {
                 use crate::ast::typed::BinaryOperator::*;
                 use Type::*;
                 match operator {
@@ -213,14 +246,14 @@ fn infer_expr(
                     crate::ast::untyped::BinaryOperator::SubtractFloat => (Float, Subtract),
                 }
             };
-            let lhs = infer_expr(lhs, scope, &expected, type_variables, lhs_span)?;
-            let rhs = infer_expr(rhs, scope, &expected, type_variables, rhs_span)?;
+            let lhs = infer_expr(lhs, scope, &expected_operand_type, type_variables, lhs_span)?;
+            let rhs = infer_expr(rhs, scope, &expected_operand_type, type_variables, rhs_span)?;
             if !(lhs
                 .evaluates_to
-                .resolve_comparsion(&expected, type_variables)
+                .resolve_comparsion(&expected_operand_type, type_variables)
                 && rhs
                     .evaluates_to
-                    .resolve_comparsion(&expected, type_variables))
+                    .resolve_comparsion(&expected_operand_type, type_variables))
             {
                 let mut lhs = lhs;
                 let mut rhs = rhs;
@@ -228,14 +261,14 @@ fn infer_expr(
                     .substitute_type_variables(type_variables, &mut Vec::new());
                 rhs.evaluates_to
                     .substitute_type_variables(type_variables, &mut Vec::new());
-                Err(TypeError::MismatchedBinaryExpression {
+                Err(Box::new(TypeError::MismatchedBinaryExpression {
                     lhs: lhs.evaluates_to,
                     lhs_span,
                     rhs: rhs.evaluates_to,
                     rhs_span,
                     operator,
-                    operator_expectation: expected,
-                })
+                    operator_expectation: expected_operand_type,
+                }))
             } else {
                 Ok(TypedExpression::new(
                     Expression::BinaryExpression {
@@ -243,9 +276,97 @@ fn infer_expr(
                         operator: typed_operator,
                         rhs: Box::new((rhs, rhs_span)),
                     },
-                    expected,
+                    expected_operand_type,
                 ))
             }
+        }
+        UntypedExpression::Definition { lhs, rhs, mutable } => {
+            let value = infer_expr(rhs.0, scope, expected_evaluates_to, type_variables, rhs.1)?;
+            let lhs = match lhs.0 {
+                UntypedLValue::Ident((ident, span)) => {
+                    use chumsky::span::Span;
+                    scope.insert(
+                        ident.clone(),
+                        InferenceMetadata {
+                            inner: value.evaluates_to.clone(),
+                            definition_type: if mutable.0 {
+                                DefinitionType::MutableLocal(
+                                    (mutable.1.start()..rhs.1.end()).into(),
+                                )
+                            } else {
+                                DefinitionType::Immutable((mutable.1.start()..rhs.1.end()).into())
+                            },
+                        },
+                    );
+
+                    (LValue::Ident((ident, span)), span)
+                }
+            };
+            Ok(TypedExpression::new(
+                Expression::Definition {
+                    lhs,
+                    rhs: Box::new((value, rhs.1)),
+                    mutable: mutable.0,
+                },
+                Type::Unit,
+            ))
+        }
+        UntypedExpression::Assignment { lhs, rhs } => {
+            let (rhs, rhs_span) = *rhs;
+            let current = scope
+                .get(&lhs.0)
+                .ok_or_else(|| TypeError::Undefined {
+                    ident: lhs.0.clone(),
+                    span,
+                })?
+                .clone();
+            match current.definition_type {
+                DefinitionType::TopLevel(_) => {
+                    return Err(Box::new(TypeError::CannotMutate {
+                        target_span: lhs.1,
+                        immutable_reason: ImmutableReason::TopLevel,
+                    }));
+                }
+                DefinitionType::Immutable(_) => {
+                    return Err(Box::new(TypeError::CannotMutate {
+                        target_span: lhs.1,
+                        immutable_reason: ImmutableReason::NotDeclaredAsMutable,
+                    }));
+                }
+                DefinitionType::CompilerProvided => {
+                    return Err(Box::new(TypeError::CannotMutate {
+                        target_span: lhs.1,
+                        immutable_reason: ImmutableReason::CompilerProvided,
+                    }));
+                }
+                DefinitionType::Argument(_) => {
+                    return Err(Box::new(TypeError::CannotMutate {
+                        target_span: lhs.1,
+                        immutable_reason: ImmutableReason::Argument,
+                    }));
+                }
+                DefinitionType::MutableLocal(_) => {}
+            };
+
+            let rhs = infer_expr(rhs, scope, expected_evaluates_to, type_variables, rhs_span)?;
+            if !rhs
+                .evaluates_to
+                .resolve_comparsion(&current.inner, type_variables)
+            {
+                return Err(Box::new(TypeError::IncorrectType {
+                    expected: current.inner,
+                    got: rhs.evaluates_to,
+                    span: rhs_span,
+                }));
+            }
+
+            Ok(TypedExpression::new(
+                Expression::Assignment {
+                    lhs,
+                    rhs: Box::new((rhs, rhs_span)),
+                },
+                Type::Unit,
+            ))
         }
     }?;
     if let Type::TypeVariable(id) = expected_evaluates_to {
@@ -256,9 +377,9 @@ fn infer_expr(
 
 fn infer_literal(
     literal: UntypedLiteral,
-    scope: &mut Scope<Type>,
+    scope: &mut Scope,
     type_variables: &mut TypeVariables,
-) -> Result<TypedExpression, TypeError> {
+) -> Result<TypedExpression, Box<TypeError>> {
     Ok(match literal {
         UntypedLiteral::String(string) => {
             TypedExpression::new(Expression::Literal(Literal::String(string)), Type::String)
@@ -279,22 +400,57 @@ fn infer_literal(
         UntypedLiteral::Function { arguments, body } => {
             infer_function(arguments, body, scope, type_variables)?
         }
+        UntypedLiteral::Array(mut elements) => {
+            let element_type = Type::new_type_variable();
+            let elements = elements
+                .drain(0..)
+                .map(|(element, span)| {
+                    let element = infer_expr(element, scope, &element_type, type_variables, span)?;
+                    if !element
+                        .evaluates_to
+                        .resolve_comparsion(&element_type, type_variables)
+                    {
+                        Err(Box::new(TypeError::IncorrectType {
+                            expected: element_type.clone(),
+                            got: element.evaluates_to,
+                            span,
+                        }))
+                    } else {
+                        Ok((element, span))
+                    }
+                })
+                .collect::<Result<Vec<_>, Box<TypeError>>>()?;
+            let len = elements.len();
+            TypedExpression::new(
+                Expression::Literal(Literal::Array(elements)),
+                Type::Array(Box::new(element_type), len),
+            )
+        }
     })
 }
 
 fn infer_function(
     mut arguments: Vec<UntypedAnnotatedIdent>,
     mut body: Vec<Spanned<UntypedExpression>>,
-    scope: &mut Scope<Type>,
+    scope: &mut Scope,
     type_variables: &mut TypeVariables,
-) -> Result<TypedExpression, TypeError> {
+) -> Result<TypedExpression, Box<TypeError>> {
     let arguments = arguments
         .drain(0..)
         .map(|argument| infer_annotated_ident(argument, scope))
         .collect::<Result<Vec<_>, _>>()?;
     let mut internal_scope = scope.clone();
     for argument in &arguments {
-        internal_scope.insert(argument.ident.0.clone(), argument.annotation.0.clone());
+        internal_scope.insert(
+            argument.ident.0.clone(),
+            InferenceMetadata {
+                inner: argument.annotation.0.clone(),
+                definition_type: DefinitionType::Argument({
+                    use chumsky::span::Span;
+                    (argument.ident.1.start()..argument.annotation.1.end()).into()
+                }),
+            },
+        );
     }
 
     let body = body
@@ -311,7 +467,7 @@ fn infer_function(
                 span,
             ))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, Box<TypeError>>>()?;
 
     let return_type = body
         .last()
@@ -334,20 +490,20 @@ fn infer_function(
 
 fn infer_annotated_ident(
     argument: UntypedAnnotatedIdent,
-    scope: &mut Scope<Type>,
-) -> Result<AnnotatedIdent, TypeError> {
-    let span = argument.ident.1.clone();
+    scope: &mut Scope,
+) -> Result<AnnotatedIdent, Box<TypeError>> {
+    let span = argument.ident.1;
     Ok(AnnotatedIdent {
         ident: argument.ident,
         annotation: match argument.annotation {
             Some((type_name, span)) => (
                 scope
                     .get(&type_name)
-                    .ok_or_else(|| TypeError::Undefined {
+                    .map(|value| value.inner.clone())
+                    .ok_or(TypeError::Undefined {
                         ident: type_name,
                         span,
-                    })?
-                    .clone(),
+                    })?,
                 span,
             ),
             None => (Type::new_type_variable(), (span)),
@@ -397,6 +553,13 @@ impl TypedExpression {
                             .substitute_type_variables(type_variables, used_type_variables);
                     }
                 }
+                Literal::Array(elements) => {
+                    for element in elements {
+                        element
+                            .0
+                            .substitute_type_variables(type_variables, used_type_variables);
+                    }
+                }
                 _ => {}
             },
             Expression::Ident(_) => {}
@@ -410,6 +573,12 @@ impl TypedExpression {
                 rhs.0
                     .substitute_type_variables(type_variables, used_type_variables);
             }
+            Expression::Definition { rhs, .. } => rhs
+                .0
+                .substitute_type_variables(type_variables, used_type_variables),
+            Expression::Assignment { rhs, .. } => rhs
+                .0
+                .substitute_type_variables(type_variables, used_type_variables),
         }
     }
 }
@@ -426,6 +595,15 @@ impl AnnotatedIdent {
     }
 }
 
+fn resolve_type_variable(id: usize, type_variables: &TypeVariables) -> Option<&Type> {
+    println!("hi");
+    match type_variables.get(&id) {
+        Some(Type::TypeVariable(id)) => resolve_type_variable(*id, type_variables),
+        Some(r#type) => Some(r#type),
+        None => None,
+    }
+}
+
 impl Type {
     fn substitute_type_variables(
         &mut self,
@@ -439,8 +617,11 @@ impl Type {
                 }
                 return_type.substitute_type_variables(type_variables, used_type_variables);
             }
+            Type::Array(element_type, _) => {
+                element_type.substitute_type_variables(type_variables, used_type_variables);
+            }
             Type::TypeVariable(id) => {
-                if let Some(r#type) = type_variables.get(&id) {
+                if let Some(r#type) = resolve_type_variable(*id, type_variables) {
                     *self = r#type.clone();
                 } else {
                     let variable_index = used_type_variables.iter().position(|it| it == id);

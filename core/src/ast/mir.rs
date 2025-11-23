@@ -1,10 +1,20 @@
+pub enum MIRType {
+    Int,
+}
+
 pub struct MIRFile {
     pub definitions: Vec<MIRDefinition>,
 }
 
-pub struct MIRDefinition {
-    pub ident: String,
-    pub value: MIRExpression,
+pub enum MIRDefinition {
+    Value {
+        ident: String,
+        value: MIRExpression,
+    },
+    Function {
+        ident: String,
+        function: MIRFunction,
+    },
 }
 
 pub enum MIRExpression {
@@ -19,4 +29,14 @@ pub enum MIRLiteral {
     Int(i64),
     Float(f64),
     Boolean(bool),
+}
+
+pub struct MIRFunction {
+    arguments: Vec<MIRAnnotatedIdent>,
+    body: Vec<MIRExpression>,
+}
+
+pub struct MIRAnnotatedIdent {
+    ident: String,
+    annotation: MIRType,
 }

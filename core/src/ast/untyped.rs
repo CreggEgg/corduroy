@@ -24,6 +24,20 @@ pub enum UntypedExpression {
         operator: BinaryOperator,
         rhs: Box<Spanned<UntypedExpression>>,
     },
+    Definition {
+        mutable: Spanned<bool>,
+        lhs: Spanned<UntypedLValue>,
+        rhs: Box<Spanned<UntypedExpression>>,
+    },
+    Assignment {
+        lhs: Spanned<String>,
+        rhs: Box<Spanned<UntypedExpression>>,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum UntypedLValue {
+    Ident(Spanned<String>),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -76,4 +90,5 @@ pub enum UntypedLiteral {
         arguments: Vec<UntypedAnnotatedIdent>,
         body: Vec<Spanned<UntypedExpression>>,
     },
+    Array(Vec<Spanned<UntypedExpression>>),
 }

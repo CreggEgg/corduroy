@@ -32,11 +32,25 @@ impl Type {
                     .enumerate()
                     .all(|(idx, argument)| argument.resolve_comparsion(&args2[idx], type_variables))
             }
+            (Type::Array(element_type, length), Type::Array(element_type2, length2)) => {
+                if length != length2 {
+                    return false;
+                };
+                if !element_type.resolve_comparsion(element_type2, type_variables) {
+                    return false;
+                }
+                true
+            }
             (Type::Int, Type::Int) => true,
             (Type::Float, Type::Float) => true,
             (Type::String, Type::String) => true,
             (Type::Unit, Type::Unit) => true,
             (Type::Boolean, Type::Boolean) => true,
+            (Type::TypeVariable(id), Type::Array(element_type, length))
+            | (Type::Array(element_type, length), Type::TypeVariable(id)) => {
+                type_variables.insert(*id, Type::Array(element_type.clone(), *length));
+                true
+            }
             (Type::TypeVariable(id), Type::Function { args, return_type })
             | (Type::Function { args, return_type }, Type::TypeVariable(id)) => {
                 type_variables.insert(
@@ -96,6 +110,7 @@ impl Type {
             Type::Unit => "()".into(),
             Type::Boolean => "bool".into(),
             Type::TypeVariable(id) => format!("'{id}"),
+            Type::Array(element_type, size) => format!("[{}; {size}]", element_type.display()),
         }
     }
 }
@@ -112,6 +127,7 @@ pub enum Type {
     Unit,
     Boolean,
     TypeVariable(usize),
+    Array(Box<Type>, usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -152,6 +168,20 @@ pub enum Expression {
         operator: BinaryOperator,
         rhs: Box<Spanned<TypedExpression>>,
     },
+    Definition {
+        lhs: Spanned<LValue>,
+        rhs: Box<Spanned<TypedExpression>>,
+        mutable: bool,
+    },
+    Assignment {
+        lhs: Spanned<String>,
+        rhs: Box<Spanned<TypedExpression>>,
+    },
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum LValue {
+    Ident(Spanned<String>),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -173,6 +203,7 @@ pub enum Literal {
         arguments: Vec<AnnotatedIdent>,
         body: Vec<Spanned<TypedExpression>>,
     },
+    Array(Vec<Spanned<TypedExpression>>),
 }
 
 #[derive(PartialEq, Debug, Clone)]

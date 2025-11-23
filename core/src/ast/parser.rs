@@ -1,6 +1,6 @@
 use chumsky::{
     IterParser, Parser,
-    error::{Rich, Simple},
+    error::Rich,
     extra,
     input::{Input, Stream, ValueInput},
     prelude::{choice, just, recursive},
@@ -11,7 +11,7 @@ use crate::{Span, Spanned, tokens::Token};
 
 use super::untyped::{
     BinaryOperator, UntypedAnnotatedIdent, UntypedDefinition, UntypedExpression, UntypedFile,
-    UntypedLiteral,
+    UntypedLValue, UntypedLiteral,
 };
 
 type ParserError<'a> = Rich<'a, Token<'a>>;
@@ -115,6 +115,19 @@ where
                 )
                 .map(|(arguments, body)| UntypedLiteral::Function { arguments, body });
 
+            let array_literal = expr
+                .clone()
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LeftSquare), just(Token::RightSquare))
+                .map(|elements| {
+                    UntypedLiteral::Array(
+                        elements.clone(), // .iter()
+                                          // // .map(|(element, span)| (element.clone(), span))
+                                          // .collect(),
+                    )
+                });
+
             // let unit_literal = just(Token::LeftBrace)
             //     .ignored()
             //     .then_ignore(just(Token::RightBrace))
@@ -124,7 +137,11 @@ where
             //     .separated_by(just(Token::Comma))
             //     .then(expr.clone().repeated())
             //     .map(|_| UntypedLiteral::Unit);
-            choice((function_literal /* , unit_literal */, mapping))
+            choice((
+                function_literal,
+                array_literal, /* , unit_literal */
+                mapping,
+            ))
         }
         .map(UntypedExpression::Literal);
 
@@ -137,7 +154,8 @@ where
 
         let function_call = function_expression
             .then(
-                expr.separated_by(just(Token::Comma))
+                expr.clone()
+                    .separated_by(just(Token::Comma))
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
             )
@@ -146,7 +164,27 @@ where
                 arguments,
             });
 
-        let atom = choice((literal, function_call, ident)).map_with(|t, e| (t, e.span()));
+        let definition = (just(Token::Let)
+            .or(just(Token::Mut))
+            .map_with(|t, e| (t == Token::Mut, e.span())))
+        .then(lvalue_parser())
+        .then_ignore(just(Token::DefineEqual))
+        .then(expr.clone())
+        .map(|((mutable, lvalue), rhs)| UntypedExpression::Definition {
+            mutable,
+            lhs: lvalue,
+            rhs: Box::new(rhs),
+        });
+        let assignment = ident_parser()
+            .then_ignore(just(Token::DefineEqual))
+            .then(expr.clone())
+            .map(|(lhs, rhs)| UntypedExpression::Assignment {
+                lhs,
+                rhs: Box::new(rhs),
+            });
+
+        let atom = choice((definition, literal, assignment, function_call, ident))
+            .map_with(|t, e| (t, e.span()));
 
         let product = atom.clone().foldl_with(
             choice((
@@ -176,7 +214,7 @@ where
                 )
             },
         );
-        let sum = product.clone().foldl_with(
+        product.clone().foldl_with(
             choice((
                 just(Token::AddInt).map(|_| BinaryOperator::AddInt),
                 just(Token::AddFloat).map(|_| BinaryOperator::AddFloat),
@@ -195,9 +233,16 @@ where
                     e.span(),
                 )
             },
-        );
-        sum
+        )
     })
+}
+
+fn lvalue_parser<'a, I>()
+-> impl Parser<'a, I, Spanned<UntypedLValue>, extra::Err<ParserError<'a>>> + Clone
+where
+    I: ValueInput<'a, Token = Token<'a>, Span = Span>,
+{
+    choice((ident_parser().map_with(|it, e| (UntypedLValue::Ident((it.0, e.span())), e.span())),))
 }
 
 fn annotated_ident<'a, I>()
