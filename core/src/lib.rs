@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use ast::{
     parser::{self, ParseError},
     untyped::UntypedFile,
 };
 use chumsky::span::SimpleSpan;
+use std::collections::HashMap;
 
 pub mod ast;
 pub mod inference;
@@ -15,7 +14,7 @@ pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
 pub type Scope<T> = HashMap<String, T>;
 
-pub fn parse_file(file: &str) -> Result<UntypedFile, ParseError> {
+pub fn parse_file(file: &str) -> Result<UntypedFile, ParseError<'_>> {
     let tokens = tokens::tokenize(file);
 
     parser::parse(tokens, file.len())
@@ -77,13 +76,23 @@ fib = (n) -> {
 main = () -> {
     let x = fib(5) > 10;
     match x {
-        true => {
-            println("fib(5) is greater than 10");
+        true -> {
+            println("fib(5) is greater than 10")
         },
-        false => {
-            println("fib(5) is not greater than 10");
+        false -> {
+            println("fib(5) is not greater than 10")
         }
-    };
+    }
+}
+"#;
+    pub const RECURSIVE_TYPES_BUG: &str = r#"
+fib = (n) -> {
+    match n {
+        x -> n+1
+    }
+}
+main = () -> {
+    fib(5)
 }
 "#;
 }
@@ -211,6 +220,7 @@ mod tests {
                                         },
                                         (16..38).into()
                                     )]
+                                    .into()
                                 }),
                                 (8..40).into()
                             )
@@ -247,6 +257,7 @@ mod tests {
                                             UntypedExpression::Ident("a".into()),
                                             (28..29).into()
                                         )]
+                                        .into()
                                     }),
                                     (7..31).into()
                                 )
@@ -282,6 +293,7 @@ mod tests {
                                             },
                                             (51..61).into()
                                         )]
+                                        .into()
                                     }),
                                     (39..63).into()
                                 )
@@ -326,7 +338,7 @@ mod tests {
                                                     UntypedExpression::Ident("a".into()),
                                                     (39..40).into()
                                                 )),
-                                                operator: BinaryOperator::AddInt,
+                                                operator: BinaryOperator("+"),
                                                 rhs: Box::new((
                                                     UntypedExpression::BinaryExpression {
                                                         lhs: Box::new((
@@ -345,6 +357,7 @@ mod tests {
                                             // UntypedExpression::Ident("a".into()),
                                             (39..48).into()
                                         )]
+                                        .into()
                                     }),
                                     (20..50).into()
                                 )
@@ -388,6 +401,7 @@ mod tests {
                                             },
                                             (70..96).into()
                                         )]
+                                        .into()
                                     }),
                                     (58..98).into()
                                 )
@@ -415,13 +429,11 @@ mod tests {
                                         (
                                             UntypedExpression::Definition {
                                                 mutable: (false, (20..23).into()),
-                                                lhs: (
-                                                    UntypedLValue::Ident((
-                                                        "my_array".into(),
-                                                        (24..32).into()
-                                                    )),
+                                                lhs: UntypedLValue::Ident((
+                                                    "my_array".into(),
                                                     (24..32).into()
-                                                ),
+                                                )),
+
                                                 rhs: Box::new((
                                                     UntypedExpression::Literal(
                                                         UntypedLiteral::Array(vec![
@@ -456,13 +468,11 @@ mod tests {
                                         (
                                             UntypedExpression::Definition {
                                                 mutable: (true, (53..56).into()),
-                                                lhs: (
-                                                    UntypedLValue::Ident((
-                                                        "x".into(),
-                                                        (57..58).into()
-                                                    )),
+                                                lhs: UntypedLValue::Ident((
+                                                    "x".into(),
                                                     (57..58).into()
-                                                ),
+                                                )),
+
                                                 rhs: Box::new((
                                                     UntypedExpression::Literal(
                                                         UntypedLiteral::Int(5)
@@ -485,6 +495,7 @@ mod tests {
                                             (68..74).into()
                                         )
                                     ]
+                                    .into()
                                 }),
                                 (8..76).into()
                             )
@@ -498,7 +509,7 @@ mod tests {
 
     mod typed {
         use crate::{
-            ast::typed::{AnnotatedIdent, BinaryOperator, LValue},
+            ast::typed::{AnnotatedIdent, LValue},
             example_programs::*,
             tests::infer,
         };
@@ -579,6 +590,7 @@ mod tests {
                                             ),
                                             (16..38).into()
                                         )]
+                                        .into()
                                     }),
                                     Type::Function {
                                         args: vec![],
@@ -595,6 +607,7 @@ mod tests {
         }
         #[test]
         fn arguments_infer() {
+            println!("HELP ME DEAR GOD PLEASE");
             let inferred = infer("FUNCTION_WITH_ARGUMENTS", FUNCTION_WITH_ARGUMENTS);
             dbg!(&inferred);
 
@@ -627,7 +640,8 @@ mod tests {
                                                     Type::TypeVariable(0),
                                                 ),
                                                 (28..29).into(),
-                                            ),],
+                                            ),]
+                                            .into(),
                                         },),
                                         Type::Function {
                                             args: vec![Type::TypeVariable(0,), Type::Int,],
@@ -672,7 +686,8 @@ mod tests {
                                                     Type::Int,
                                                 ),
                                                 (51..61).into(),
-                                            ),],
+                                            ),]
+                                            .into(),
                                         },),
                                         Type::Function {
                                             args: vec![],
@@ -688,9 +703,15 @@ mod tests {
                 }
             )
         }
+        #[test]
+        fn recursive_types_bug() {
+            println!("HELP ME DEAR GOD PLEASE");
+            let inferred = infer("RECURSIVE_TYPES_BUG", RECURSIVE_TYPES_BUG);
+        }
 
         #[test]
         fn binary_op_infer() {
+            println!("698");
             let inferred = infer("BINARY_OP", BINARY_OP);
 
             dbg!(&inferred);
@@ -702,8 +723,8 @@ mod tests {
                             Definition {
                                 lhs: ("my_cool_function".into(), (1..17).into()),
                                 rhs: (
-                                    TypedExpression {
-                                        expression: Expression::Literal(Literal::Function {
+                                    TypedExpression::new(
+                                        Expression::Literal(Literal::Function {
                                             arguments: vec![
                                                 AnnotatedIdent {
                                                     ident: ("a".into(), (21..22).into()),
@@ -719,57 +740,55 @@ mod tests {
                                                 },
                                             ],
                                             body: vec![(
-                                                TypedExpression {
-                                                    expression: Expression::BinaryExpression {
-                                                        lhs: Box::new((
-                                                            TypedExpression {
-                                                                expression: Expression::Ident(
-                                                                    "a".into()
-                                                                ),
-                                                                evaluates_to: Type::Int,
-                                                            },
+                                                TypedExpression::new(
+                                                    Expression::BinaryExpression {
+                                                        lhs: (
+                                                            TypedExpression::new(
+                                                                Expression::Ident("a".into()),
+                                                                Type::Int,
+                                                            ),
                                                             (39..40).into(),
-                                                        )),
-                                                        operator: BinaryOperator::Add,
-                                                        rhs: Box::new((
-                                                            TypedExpression {
-                                                                expression:
-                                                                    Expression::BinaryExpression {
-                                                                        lhs: Box::new((
-                                                                            TypedExpression {
-                                                                                expression: Expression::Ident(
-                                                                                    "b".into(),
-                                                                                ),
-                                                                                evaluates_to: Type::Int,
-                                                                            },
-                                                                            (43..44).into(),
-                                                                        )),
-                                                                        operator: BinaryOperator::Multiply,
-                                                                        rhs: Box::new((
-                                                                            TypedExpression {
-                                                                                expression: Expression::Ident(
-                                                                                    "c".into(),
-                                                                                ),
-                                                                                evaluates_to: Type::Int,
-                                                                            },
-                                                                            (47..48).into(),
-                                                                        )),
-                                                                    },
-                                                                evaluates_to: Type::Int,
-                                                            },
+                                                        ),
+                                                        operator: "+".into(),
+                                                        rhs: (
+                                                            TypedExpression::new(
+                                                                Expression::BinaryExpression {
+                                                                    lhs: (
+                                                                        TypedExpression::new(
+                                                                            Expression::Ident(
+                                                                                "b".into(),
+                                                                            ),
+                                                                            Type::Int,
+                                                                        ),
+                                                                        (43..44).into(),
+                                                                    ),
+                                                                    operator: "*".into(),
+                                                                    rhs: (
+                                                                        TypedExpression::new(
+                                                                            Expression::Ident(
+                                                                                "c".into(),
+                                                                            ),
+                                                                            Type::Int,
+                                                                        ),
+                                                                        (47..48).into(),
+                                                                    ),
+                                                                },
+                                                                Type::Int,
+                                                            ),
                                                             (43..48).into(),
-                                                        )),
+                                                        ),
                                                     },
-                                                    evaluates_to: Type::Int,
-                                                },
+                                                    Type::Int,
+                                                ),
                                                 (39..48).into(),
-                                            ),],
+                                            ),]
+                                            .into(),
                                         },),
-                                        evaluates_to: Type::Function {
+                                        Type::Function {
                                             args: vec![Type::Int, Type::Int, Type::Int,],
                                             return_type: Box::new(Type::Int),
                                         },
-                                    },
+                                    ),
                                     (20..50).into(),
                                 ),
                             },
@@ -779,49 +798,47 @@ mod tests {
                             Definition {
                                 lhs: ("main".into(), (51..55).into()),
                                 rhs: (
-                                    TypedExpression {
-                                        expression: Expression::Literal(Literal::Function {
+                                    TypedExpression::new(
+                                        Expression::Literal(Literal::Function {
                                             arguments: vec![],
                                             body: vec![(
-                                                TypedExpression {
-                                                    expression: Expression::FunctionCall {
+                                                TypedExpression::new(
+                                                    Expression::FunctionCall {
                                                         function: Box::new((
-                                                            TypedExpression {
-                                                                expression: Expression::Ident(
+                                                            TypedExpression::new(
+                                                                Expression::Ident(
                                                                     "my_cool_function".into(),
                                                                 ),
-                                                                evaluates_to: Type::Function {
-                                                                    args: vec![Type::Int, Type::Int, Type::Int,],
-                                                                    return_type: Box::new(Type::Int),
+                                                                Type::Function {
+                                                                    args: vec![
+                                                                        Type::Int,
+                                                                        Type::Int,
+                                                                        Type::Int,
+                                                                    ],
+                                                                    return_type: Box::new(
+                                                                        Type::Int
+                                                                    ),
                                                                 },
-                                                            },
+                                                            ),
                                                             (70..86).into(),
                                                         )),
                                                         arguments: vec![
-                                                            (
-                                                                int!(5),
-                                                                (87..88).into(),
-                                                            ),
-                                                            (
-                                                                int!(10),
-                                                                (90..92).into(),
-                                                            ),
-                                                            (
-                                                                int!(3),
-                                                                (94..95).into(),
-                                                            ),
+                                                            (int!(5), (87..88).into(),),
+                                                            (int!(10), (90..92).into(),),
+                                                            (int!(3), (94..95).into(),),
                                                         ],
                                                     },
-                                                    evaluates_to: Type::Int,
-                                                },
+                                                    Type::Int,
+                                                ),
                                                 (70..96).into(),
-                                            ),],
+                                            ),]
+                                            .into(),
                                         },),
-                                        evaluates_to: Type::Function {
+                                        Type::Function {
                                             args: vec![],
                                             return_type: Box::new(Type::Int),
                                         },
-                                    },
+                                    ),
                                     (58..98).into(),
                                 ),
                             },
@@ -852,9 +869,9 @@ mod tests {
                                         (
                                             TypedExpression::new(
                                                 Expression::BinaryExpression {
-                                                    lhs: Box::new((int!(10), (39..41).into())),
-                                                    operator: BinaryOperator::Add,
-                                                    rhs: Box::new((int!(15), (44..46).into())),
+                                                    lhs: (int!(10), (39..41).into()),
+                                                    operator: "+".to_string(),
+                                                    rhs: (int!(15), (44..46).into()),
                                                 },
                                                 Type::Int,
                                             ),
@@ -907,7 +924,7 @@ mod tests {
                                 TypedExpression::new(
                                     Expression::Literal(Literal::Function {
                                         arguments: vec![],
-                                        body
+                                        body: body.into()
                                     }),
                                     Type::Function {
                                         args: vec![],
@@ -921,6 +938,18 @@ mod tests {
                     )]
                 }
             );
+        }
+
+        #[test]
+        fn cases_and_recursion_parse_and_infer() {
+            let inferred = infer("CASES_AND_RECURSION", CASES_AND_RECURSION);
+
+            assert_eq!(
+                inferred,
+                File {
+                    definitions: todo!()
+                }
+            )
         }
     }
 }

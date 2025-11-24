@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Spanned, inference::TypeVariables};
+use crate::{Span, Spanned, inference::TypeVariables};
 
 static TYPE_VARIABLE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -82,7 +82,12 @@ impl Type {
                 type_variables.insert(*id, Type::Boolean);
                 true
             }
-            (Type::TypeVariable(id), Type::TypeVariable(id2)) => id == id2,
+            (Type::TypeVariable(id), Type::TypeVariable(id2)) => {
+                if id != id2 {
+                    type_variables.insert(*id2, Type::TypeVariable(*id));
+                }
+                true
+            } //id == id2,
             _ => false,
         }
     }
@@ -143,13 +148,13 @@ pub struct Definition {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct TypedExpression {
-    pub expression: Expression,
+    pub expression: Box<Expression>,
     pub evaluates_to: Type,
 }
 impl TypedExpression {
     pub fn new(expression: Expression, r#type: Type) -> Self {
         Self {
-            expression,
+            expression: Box::new(expression),
             evaluates_to: r#type,
         }
     }
@@ -163,11 +168,11 @@ pub enum Expression {
     },
     Literal(Literal),
     Ident(String),
-    BinaryExpression {
-        lhs: Box<Spanned<TypedExpression>>,
-        operator: BinaryOperator,
-        rhs: Box<Spanned<TypedExpression>>,
-    },
+    // BinaryExpression {
+    //     lhs: Box<Spanned<TypedExpression>>,
+    //     operator: BinaryOperator,
+    //     rhs: Box<Spanned<TypedExpression>>,
+    // },
     Definition {
         lhs: Spanned<LValue>,
         rhs: Box<Spanned<TypedExpression>>,
@@ -177,20 +182,46 @@ pub enum Expression {
         lhs: Spanned<String>,
         rhs: Box<Spanned<TypedExpression>>,
     },
+    Block(Block),
+    Match {
+        target: Box<Spanned<TypedExpression>>,
+        arms: Vec<MatchArm>,
+    },
+    BinaryExpression {
+        operator: String,
+        lhs: (TypedExpression, Span),
+        rhs: (TypedExpression, Span),
+    },
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct MatchArm {
+    pub lhs: LValue,
+    pub rhs: Spanned<TypedExpression>,
 }
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum LValue {
     Ident(Spanned<String>),
+    Int(i64),
+    Float(f64),
+    Boolean(bool),
+    String(String),
+    Array(Vec<Spanned<LValue>>),
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum BinaryOperator {
-    Add,
-    Multiply,
-    Divide,
-    Subtract,
-}
+// #[derive(Debug, PartialEq, Clone, Copy)]
+// pub enum BinaryOperator {
+//     Add,
+//     Multiply,
+//     Divide,
+//     Subtract,
+//     GreaterThan,
+//     LessThan,
+//     LessThanOrEqual,
+//     GreaterThanOrEqual,
+//     Equal,
+// }
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Literal {
@@ -201,7 +232,7 @@ pub enum Literal {
     Boolean(bool),
     Function {
         arguments: Vec<AnnotatedIdent>,
-        body: Vec<Spanned<TypedExpression>>,
+        body: Block,
     },
     Array(Vec<Spanned<TypedExpression>>),
 }
@@ -210,4 +241,12 @@ pub enum Literal {
 pub struct AnnotatedIdent {
     pub ident: Spanned<String>,
     pub annotation: Spanned<Type>,
+}
+#[derive(PartialEq, Debug, Clone)]
+pub struct Block(pub Vec<Spanned<TypedExpression>>);
+
+impl From<Vec<Spanned<TypedExpression>>> for Block {
+    fn from(value: Vec<Spanned<TypedExpression>>) -> Self {
+        Self(value)
+    }
 }

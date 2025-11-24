@@ -42,26 +42,36 @@ pub enum Token<'a> {
     Semicolon,
     #[token(":")]
     Colon,
-    #[token("=")]
+    #[token("=", priority = 3)]
     DefineEqual,
-    #[token("==")]
-    EqualComparison,
-    #[token("+")]
-    AddInt,
-    #[token("+.")]
-    AddFloat,
-    #[token("*")]
-    MultiplyInt,
-    #[token("*.")]
-    MultiplyFloat,
-    #[token("-")]
-    SubtractInt,
-    #[token("-.")]
-    SubtractFloat,
-    #[token("/")]
-    DivideInt,
-    #[token("/.")]
-    DivideFloat,
+    #[regex("[=<>+\\.]{1}")]
+    BinaryOperator(&'a str),
+    // #[token("==")]
+    // EqualComparison,
+    // #[token("<")]
+    // LessThan,
+    // #[token(">")]
+    // GreaterThan,
+    // #[token("<=")]
+    // LessThanOrEqual,
+    // #[token(">=")]
+    // GreaterThanOrEqual,
+    // #[token("+")]
+    // AddInt,
+    // #[token("+.")]
+    // AddFloat,
+    // #[token("*")]
+    // MultiplyInt,
+    // #[token("*.")]
+    // MultiplyFloat,
+    // #[token("-")]
+    // SubtractInt,
+    // #[token("-.")]
+    // SubtractFloat,
+    // #[token("/")]
+    // DivideInt,
+    // #[token("/.")]
+    // DivideFloat,
     #[token("->")]
     Arrow,
     #[token("let")]
@@ -74,6 +84,8 @@ pub enum Token<'a> {
     Int(&'a str),
     #[regex("mut")]
     Mut,
+    #[regex("match")]
+    Match,
 }
 
 impl Display for Token<'_> {
@@ -88,15 +100,15 @@ impl Display for Token<'_> {
             Token::Semicolon => f.write_char(';'),
             Token::Colon => f.write_char(':'),
             Token::DefineEqual => f.write_char('='),
-            Token::EqualComparison => f.write_str("=="),
-            Token::AddInt => f.write_str("+"),
-            Token::AddFloat => f.write_str("+."),
-            Token::MultiplyInt => f.write_str("*"),
-            Token::MultiplyFloat => f.write_str("*."),
-            Token::SubtractInt => f.write_str("-"),
-            Token::SubtractFloat => f.write_str("-."),
-            Token::DivideInt => f.write_str("/"),
-            Token::DivideFloat => f.write_str("/."),
+            // Token::EqualComparison => f.write_str("=="),
+            // Token::AddInt => f.write_str("+"),
+            // Token::AddFloat => f.write_str("+."),
+            // Token::MultiplyInt => f.write_str("*"),
+            // Token::MultiplyFloat => f.write_str("*."),
+            // Token::SubtractInt => f.write_str("-"),
+            // Token::SubtractFloat => f.write_str("-."),
+            // Token::DivideInt => f.write_str("/"),
+            // Token::DivideFloat => f.write_str("/."),
             Token::Arrow => f.write_str("->"),
             Token::Let => f.write_str("let"),
             Token::Ident(ident) => f.write_str(ident),
@@ -109,6 +121,11 @@ impl Display for Token<'_> {
             Token::LeftSquare => f.write_char('['),
             Token::RightSquare => f.write_char(']'),
             Token::Mut => f.write_str("mut"),
+            Token::Match => f.write_str("match"),
+            Token::BinaryOperator(op) => f.write_str(op), // Token::LessThan => f.write_str("<"),
+                                                          // Token::GreaterThan => f.write_str(">"),
+                                                          // Token::LessThanOrEqual => f.write_str("<="),
+                                                          // Token::GreaterThanOrEqual => f.write_str(">="),
         }
     }
 }

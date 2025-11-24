@@ -7,7 +7,11 @@ use chumsky::{
     select,
 };
 
-use crate::{Span, Spanned, tokens::Token};
+use crate::{
+    Span, Spanned,
+    ast::untyped::{UntypedBlock, UntypedMatchArm},
+    tokens::Token,
+};
 
 use super::untyped::{
     BinaryOperator, UntypedAnnotatedIdent, UntypedDefinition, UntypedExpression, UntypedFile,
@@ -96,6 +100,12 @@ where
     I: ValueInput<'a, Token = Token<'a>, Span = Span>,
 {
     recursive(|expr| {
+        let block = expr
+            .clone()
+            .separated_by(just(Token::Semicolon))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftCurly), just(Token::RightCurly))
+            .map(|lines| UntypedBlock(lines));
         let literal = {
             let mapping = select! {
                 Token::Int(x) => UntypedLiteral::Int(x.parse::<i64>().unwrap()),
@@ -107,12 +117,7 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
                 .then_ignore(just(Token::Arrow))
-                .then(
-                    expr.clone()
-                        .separated_by(just(Token::Semicolon))
-                        .collect::<Vec<_>>()
-                        .delimited_by(just(Token::LeftCurly), just(Token::RightCurly)),
-                )
+                .then(block.clone())
                 .map(|(arguments, body)| UntypedLiteral::Function { arguments, body });
 
             let array_literal = expr
@@ -142,8 +147,27 @@ where
                 array_literal, /* , unit_literal */
                 mapping,
             ))
-        }
-        .map(UntypedExpression::Literal);
+        };
+        // .map(UntypedExpression::Literal);
+
+        let match_arm = lvalue_parser()
+            .then_ignore(just(Token::Arrow))
+            .then(expr.clone())
+            .map(|(lhs, rhs)| UntypedMatchArm { lhs, rhs });
+
+        let r#match = just(Token::Match)
+            .ignore_then(expr.clone())
+            .then(
+                match_arm
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .then_ignore(just(Token::Comma).or_not())
+                    .delimited_by(just(Token::LeftCurly), just(Token::RightCurly)),
+            )
+            .map(|(target, arms)| UntypedExpression::Match {
+                target: Box::new(target),
+                arms,
+            });
 
         let ident = ident_parser().map(|ident| UntypedExpression::Ident(ident.0));
 
@@ -183,16 +207,30 @@ where
                 rhs: Box::new(rhs),
             });
 
-        let atom = choice((definition, literal, assignment, function_call, ident))
-            .map_with(|t, e| (t, e.span()));
+        let atom = choice((
+            r#match,
+            block.map(UntypedExpression::Block),
+            definition,
+            literal.map(UntypedExpression::Literal),
+            assignment,
+            function_call,
+            ident,
+        ))
+        .map_with(|t, e| (t, e.span()));
 
         let product = atom.clone().foldl_with(
-            choice((
-                just(Token::MultiplyInt).map(|_| BinaryOperator::MultiplyInt),
-                just(Token::MultiplyFloat).map(|_| BinaryOperator::MultiplyFloat),
-                just(Token::DivideInt).map(|_| BinaryOperator::DivideInt),
-                just(Token::DivideFloat).map(|_| BinaryOperator::DivideFloat),
-            ))
+            select! {
+                Token::BinaryOperator("*") => BinaryOperator("*".to_string()),
+                Token::BinaryOperator("*.") => BinaryOperator("*.".to_string()),
+                Token::BinaryOperator("/") => BinaryOperator("/".to_string()),
+                Token::BinaryOperator("/.") => BinaryOperator("/.".to_string()),
+            }
+            // choice((
+            //     just(Token::MultiplyInt).map(|_| BinaryOperator::MultiplyInt),
+            //     just(Token::MultiplyFloat).map(|_| BinaryOperator::MultiplyFloat),
+            //     just(Token::DivideInt).map(|_| BinaryOperator::DivideInt),
+            //     just(Token::DivideFloat).map(|_| BinaryOperator::DivideFloat),
+            // ))
             .then(atom.clone())
             .repeated(),
             |lhs, (op, rhs), e| {
@@ -214,14 +252,37 @@ where
                 )
             },
         );
-        product.clone().foldl_with(
-            choice((
-                just(Token::AddInt).map(|_| BinaryOperator::AddInt),
-                just(Token::AddFloat).map(|_| BinaryOperator::AddFloat),
-                just(Token::SubtractInt).map(|_| BinaryOperator::SubtractInt),
-                just(Token::SubtractFloat).map(|_| BinaryOperator::SubtractFloat),
-            ))
+        let sum = product.clone().foldl_with(
+            select! {
+                Token::BinaryOperator("+") => BinaryOperator("+".to_string()),
+                Token::BinaryOperator("+.") => BinaryOperator("+.".to_string()),
+                Token::BinaryOperator("-") => BinaryOperator("-".to_string()),
+                Token::BinaryOperator("-.") => BinaryOperator("-.".to_string()),
+            }
+            // choice((
+            //     just(Token::AddInt).map(|_| BinaryOperator::AddInt),
+            //     just(Token::AddFloat).map(|_| BinaryOperator::AddFloat),
+            //     just(Token::SubtractInt).map(|_| BinaryOperator::SubtractInt),
+            //     just(Token::SubtractFloat).map(|_| BinaryOperator::SubtractFloat),
+            // ))
             .then(product.clone())
+            .repeated(),
+            |lhs, (op, rhs), e| {
+                (
+                    UntypedExpression::BinaryExpression {
+                        lhs: Box::new(lhs),
+                        operator: op,
+                        rhs: Box::new(rhs),
+                    },
+                    e.span(),
+                )
+            },
+        );
+        sum.clone().foldl_with(
+            select! {
+                Token::BinaryOperator(x) => BinaryOperator(x.to_string())
+            }
+            .then(sum.clone())
             .repeated(),
             |lhs, (op, rhs), e| {
                 (
@@ -237,12 +298,29 @@ where
     })
 }
 
-fn lvalue_parser<'a, I>()
--> impl Parser<'a, I, Spanned<UntypedLValue>, extra::Err<ParserError<'a>>> + Clone
+fn lvalue_parser<'a, I>() -> impl Parser<'a, I, UntypedLValue, extra::Err<ParserError<'a>>> + Clone
 where
     I: ValueInput<'a, Token = Token<'a>, Span = Span>,
 {
-    choice((ident_parser().map_with(|it, e| (UntypedLValue::Ident((it.0, e.span())), e.span())),))
+    recursive(|lvalue_parser| {
+        let mapping = select! {
+            Token::Int(x) => UntypedLValue::Int(x.parse::<i64>().unwrap()),
+            Token::String(x) => UntypedLValue::String(x[1..x.len() - 1].to_string()),
+        };
+
+        let array = lvalue_parser
+            .clone()
+            .map_with(|t, e| (t, e.span()))
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LeftSquare), just(Token::RightSquare))
+            .map(|elements| UntypedLValue::Array(elements));
+        choice((
+            mapping,
+            array,
+            ident_parser().map_with(|it, e| UntypedLValue::Ident((it.0, e.span()))),
+        ))
+    })
 }
 
 fn annotated_ident<'a, I>()
