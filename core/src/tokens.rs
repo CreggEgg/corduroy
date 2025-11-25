@@ -44,7 +44,7 @@ pub enum Token<'a> {
     Colon,
     #[token("=", priority = 3)]
     DefineEqual,
-    #[regex("[=<>+\\.]{1}")]
+    #[regex("[=<>+\\.\\*-][=<>+\\.\\*-]?")]
     BinaryOperator(&'a str),
     // #[token("==")]
     // EqualComparison,

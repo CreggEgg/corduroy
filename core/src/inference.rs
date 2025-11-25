@@ -80,17 +80,17 @@ pub fn infer_ast(mut untyped_ast: UntypedFile, mut scope: Scope) -> Result<File,
         .definitions
         .drain(0..)
         .map(|(definition, span)| {
-            dbg!(&scope);
+            // dbg!(&scope);
             eprintln!("inferring a definition");
             let mut type_variables: TypeVariables = HashMap::new();
             let inferred_definition =
                 infer_definition(definition, &mut scope, &mut type_variables)?;
             eprintln!("substituting type variables in a definition");
-            dbg!(&type_variables);
+            // dbg!(&type_variables);
             let finalized_definition =
                 inferred_definition.substitute_type_variables(&type_variables);
             eprintln!("substituted type variables in a definition");
-            dbg!(&finalized_definition);
+            // dbg!(&finalized_definition);
             eprintln!("=================================================\n=================================================\n=================================================\n=================================================\n");
             Ok((finalized_definition, span.to_owned()))
         });
@@ -739,10 +739,10 @@ impl TypedExpression {
         type_variables: &TypeVariables,
         used_type_variables: &mut Vec<usize>,
     ) {
-        dbg!(&self);
+        // dbg!(&self);
         self.evaluates_to
             .substitute_type_variables(type_variables, used_type_variables);
-        dbg!(&self);
+        // dbg!(&self);
 
         match &mut *self.expression {
             Expression::FunctionCall {

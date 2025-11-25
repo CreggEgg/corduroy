@@ -143,6 +143,66 @@ mod tests {
                         definition_type: DefinitionType::CompilerProvided,
                     },
                 ),
+                (
+                    "+".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Int, Type::Int],
+                            return_type: Box::new(Type::Int),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
+                (
+                    "-".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Int, Type::Int],
+                            return_type: Box::new(Type::Int),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
+                (
+                    "*".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Int, Type::Int],
+                            return_type: Box::new(Type::Int),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
+                (
+                    "/".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Int, Type::Int],
+                            return_type: Box::new(Type::Int),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
+                (
+                    "*.".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Float, Type::Float],
+                            return_type: Box::new(Type::Float),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
+                (
+                    "/.".into(),
+                    InferenceMetadata {
+                        inner: Type::Function {
+                            args: vec![Type::Float, Type::Float],
+                            return_type: Box::new(Type::Float),
+                        },
+                        definition_type: DefinitionType::CompilerProvided,
+                    },
+                ),
             ]),
         ) {
             Ok(ast) => ast,
@@ -338,14 +398,14 @@ mod tests {
                                                     UntypedExpression::Ident("a".into()),
                                                     (39..40).into()
                                                 )),
-                                                operator: BinaryOperator("+"),
+                                                operator: BinaryOperator("+".to_string()),
                                                 rhs: Box::new((
                                                     UntypedExpression::BinaryExpression {
                                                         lhs: Box::new((
                                                             UntypedExpression::Ident("b".into()),
                                                             (43..44).into()
                                                         )),
-                                                        operator: BinaryOperator::MultiplyInt,
+                                                        operator: BinaryOperator("*".to_string()),
                                                         rhs: Box::new((
                                                             UntypedExpression::Ident("c".into()),
                                                             (47..48).into()
@@ -450,7 +510,7 @@ mod tests {
                                                                     ),
                                                                     (39..41).into()
                                                                 )),
-                                                                operator: BinaryOperator::AddInt,
+                                                                operator: BinaryOperator("+".to_string()),
                                                                 rhs: Box::new((
                                                                     UntypedExpression::Literal(
                                                                         UntypedLiteral::Int(15)
