@@ -26,7 +26,7 @@ pub enum UntypedExpression {
     },
     Definition {
         mutable: Spanned<bool>,
-        lhs: UntypedLValue,
+        lhs: Spanned<UntypedLValue>,
         rhs: Box<Spanned<UntypedExpression>>,
     },
     Assignment {

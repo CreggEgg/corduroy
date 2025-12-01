@@ -1,123 +1,365 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{Span, Spanned, inference::TypeVariables};
 
-static TYPE_VARIABLE_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
 impl Type {
-    pub fn reset_type_variable_counter() {
-        TYPE_VARIABLE_COUNTER.fetch_min(0, Ordering::SeqCst);
+    pub fn new_type_variable(used_type_variables: &mut Vec<TypeVariableId>) -> Self {
+        let new_id = TypeVariableId(used_type_variables.len());
+
+        used_type_variables.push(new_id);
+        Self::TypeVariable(new_id)
     }
 
-    pub fn new_type_variable() -> Self {
-        Self::TypeVariable(TYPE_VARIABLE_COUNTER.fetch_add(1, Ordering::SeqCst))
-    }
-
-    pub fn resolve_comparsion(&self, other: &Self, type_variables: &mut TypeVariables) -> bool {
+    pub(crate) fn unify(
+        &self,
+        other: &Type,
+        resolved_type_variables: &mut HashMap<TypeVariableId, Type>,
+        resolved_generics: &mut HashMap<GenericId, Type>,
+    ) -> bool {
         match (self, other) {
             (
                 Type::Function { args, return_type },
                 Type::Function {
-                    args: args2,
-                    return_type: return_type2,
+                    args: other_args,
+                    return_type: other_return_type,
                 },
             ) => {
-                if args.len() != args2.len() {
-                    return false;
-                };
-                if !return_type.resolve_comparsion(return_type2, type_variables) {
-                    return false;
-                }
-                args.iter()
-                    .enumerate()
-                    .all(|(idx, argument)| argument.resolve_comparsion(&args2[idx], type_variables))
-            }
-            (Type::Array(element_type, length), Type::Array(element_type2, length2)) => {
-                if length != length2 {
-                    return false;
-                };
-                if !element_type.resolve_comparsion(element_type2, type_variables) {
-                    return false;
-                }
-                true
+                args.iter().enumerate().all(|(i, arg)| {
+                    arg.unify(&other_args[i], resolved_type_variables, resolved_generics)
+                }) && return_type.unify(
+                    other_return_type,
+                    resolved_type_variables,
+                    resolved_generics,
+                )
             }
             (Type::Int, Type::Int) => true,
             (Type::Float, Type::Float) => true,
             (Type::String, Type::String) => true,
             (Type::Unit, Type::Unit) => true,
             (Type::Boolean, Type::Boolean) => true,
-            (Type::TypeVariable(id), Type::Array(element_type, length))
-            | (Type::Array(element_type, length), Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::Array(element_type.clone(), *length));
-                true
+            (Type::Array(item_type, len), Type::Array(other_item_type, other_len)) => {
+                item_type.unify(&other_item_type, resolved_type_variables, resolved_generics)
+                    && len == other_len
             }
             (Type::TypeVariable(id), Type::Function { args, return_type })
             | (Type::Function { args, return_type }, Type::TypeVariable(id)) => {
-                type_variables.insert(
-                    *id,
-                    Type::Function {
-                        args: args.clone(),
-                        return_type: return_type.clone(),
-                    },
-                );
-                true
+                if let Some(resolved_type) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    match resolved_type {
+                        Type::Function {
+                            args: other_args,
+                            return_type: other_return_type,
+                        } => {
+                            args == other_args
+                                && return_type.unify(
+                                    &other_return_type.clone(),
+                                    resolved_type_variables,
+                                    resolved_generics,
+                                )
+                        }
+                        _ => {
+                            resolved_type_variables.insert(
+                                *id,
+                                Type::Function {
+                                    args: args.clone(),
+                                    return_type: return_type.clone(),
+                                },
+                            );
+                            true
+                        }
+                    }
+                } else {
+                    false
+                }
+            }
+            (Type::TypeVariable(id), Type::Array(element_type, len))
+            | (Type::Array(element_type, len), Type::TypeVariable(id)) => {
+                if let Some(resolved_type) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    match resolved_type {
+                        Type::Array(other_element_type, other_len) => {
+                            len == other_len
+                                && element_type.unify(
+                                    &other_element_type.clone(),
+                                    resolved_type_variables,
+                                    resolved_generics,
+                                )
+                        }
+                        _ => {
+                            resolved_type_variables
+                                .insert(*id, Type::Array(element_type.clone(), *len));
+                            true
+                        }
+                    }
+                } else {
+                    false
+                }
             }
             (Type::TypeVariable(id), Type::Int) | (Type::Int, Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::Int);
-                true
+                if let Some(Type::Int) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    resolved_type_variables.insert(*id, Type::Int);
+                    true
+                } else {
+                    false
+                }
             }
             (Type::TypeVariable(id), Type::Float) | (Type::Float, Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::Float);
-                true
+                if let Some(Type::Float) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    resolved_type_variables.insert(*id, Type::Float);
+                    true
+                } else {
+                    false
+                }
             }
             (Type::TypeVariable(id), Type::String) | (Type::String, Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::String);
-                true
+                if let Some(Type::String) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    resolved_type_variables.insert(*id, Type::String);
+                    true
+                } else {
+                    false
+                }
             }
             (Type::TypeVariable(id), Type::Unit) | (Type::Unit, Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::Unit);
-                true
+                if let Some(Type::Unit) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    resolved_type_variables.insert(*id, Type::Unit);
+                    true
+                } else {
+                    false
+                }
             }
             (Type::TypeVariable(id), Type::Boolean) | (Type::Boolean, Type::TypeVariable(id)) => {
-                type_variables.insert(*id, Type::Boolean);
-                true
-            }
-            (Type::TypeVariable(id), Type::TypeVariable(id2)) => {
-                if id != id2 {
-                    type_variables.insert(*id2, Type::TypeVariable(*id));
+                if let Some(Type::Boolean) =
+                    resolve_type_variable_and_simplify(*id, resolved_type_variables)
+                {
+                    resolved_type_variables.insert(*id, Type::Boolean);
+                    true
+                } else {
+                    false
                 }
-                true
-            } //id == id2,
+            }
+            (Type::TypeVariable(id), Type::TypeVariable(other_id)) => {
+                match (
+                    resolve_type_variable(*id, resolved_type_variables),
+                    resolve_type_variable(*other_id, resolved_type_variables),
+                ) {
+                    (None, None) => {
+                        resolved_type_variables.insert(*id, Type::TypeVariable(*other_id));
+                        true
+                    }
+                    (Some(r#type), None) | (None, Some(r#type)) => {
+                        resolved_type_variables.insert(*id, r#type.clone());
+                        true
+                    }
+                    (Some(r#type), Some(other_type)) => r#type.clone().unify(
+                        &other_type.clone(),
+                        resolved_type_variables,
+                        resolved_generics,
+                    ),
+                }
+            }
+            (Type::Generic(id), Type::Function { args, return_type })
+            | (Type::Function { args, return_type }, Type::Generic(id)) => {
+                if let Some(resolved_type) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    match resolved_type {
+                        Type::Function {
+                            args: other_args,
+                            return_type: other_return_type,
+                        } => {
+                            args == other_args
+                                && return_type.unify(
+                                    &other_return_type.clone(),
+                                    resolved_type_variables,
+                                    resolved_generics,
+                                )
+                        }
+                        _ => {
+                            resolved_generics.insert(
+                                *id,
+                                Type::Function {
+                                    args: args.clone(),
+                                    return_type: return_type.clone(),
+                                },
+                            );
+                            true
+                        }
+                    }
+                } else {
+                    false
+                }
+            }
+            (Type::Generic(id), Type::Array(_, _)) | (Type::Array(_, _), Type::Generic(id)) => {
+                todo!()
+            }
+            (Type::Generic(id), Type::Int) | (Type::Int, Type::Generic(id)) => {
+                if let Some(Type::Int) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    resolved_generics.insert(*id, Type::Int);
+                    true
+                } else {
+                    false
+                }
+            }
+            (Type::Generic(id), Type::Float) | (Type::Float, Type::Generic(id)) => {
+                if let Some(Type::Float) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    resolved_generics.insert(*id, Type::Float);
+                    true
+                } else {
+                    false
+                }
+            }
+            (Type::Generic(id), Type::String) | (Type::String, Type::Generic(id)) => {
+                if let Some(Type::String) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    resolved_generics.insert(*id, Type::String);
+                    true
+                } else {
+                    false
+                }
+            }
+            (Type::Generic(id), Type::Unit) | (Type::Unit, Type::Generic(id)) => {
+                if let Some(Type::Unit) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    resolved_generics.insert(*id, Type::Unit);
+                    true
+                } else {
+                    false
+                }
+            }
+            (Type::Generic(id), Type::Boolean) | (Type::Boolean, Type::Generic(id)) => {
+                if let Some(Type::Boolean) =
+                    resolve_generic_and_simplify(*id, resolved_type_variables, resolved_generics)
+                {
+                    resolved_generics.insert(*id, Type::Boolean);
+                    true
+                } else {
+                    false
+                }
+            }
+            (Type::TypeVariable(type_variable_id), Type::Generic(id))
+            | (Type::Generic(id), Type::TypeVariable(type_variable_id)) => {
+                match (
+                    resolve_generic(*id, resolved_type_variables, resolved_generics),
+                    resolve_type_variable(*type_variable_id, resolved_type_variables),
+                ) {
+                    (None, other) => {
+                        resolved_generics.insert(
+                            *id,
+                            other
+                                .cloned()
+                                .unwrap_or(Type::TypeVariable(*type_variable_id)),
+                        );
+                        true
+                    }
+                    (Some(r#type), other) => r#type.clone().unify(
+                        &other
+                            .cloned()
+                            .unwrap_or(Type::TypeVariable(*type_variable_id)),
+                        resolved_type_variables,
+                        resolved_generics,
+                    ),
+                }
+            }
+            (Type::Generic(id), Type::Generic(id2)) => unreachable!(),
             _ => false,
         }
     }
+}
 
-    pub fn try_get_function_return_type(&self) -> Option<Type> {
-        let Type::Function { return_type, .. } = self else {
-            return None;
-        };
-        Some(*return_type.clone())
+pub fn resolve_type_variable(
+    id: TypeVariableId,
+    resolved_type_variables: &HashMap<TypeVariableId, Type>,
+) -> Option<&Type> {
+    match resolved_type_variables.get(&id) {
+        Some(Type::TypeVariable(id)) => resolve_type_variable(*id, resolved_type_variables),
+        Some(r#type) => Some(r#type),
+        None => None,
     }
-
-    pub fn display(&self) -> String {
-        match self {
-            Type::Function { args, return_type } => format!(
-                "({}) -> {}",
-                args.iter()
-                    .map(|arg| arg.display())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                return_type.display()
-            ),
-            Type::Int => "int".into(),
-            Type::Float => "float".into(),
-            Type::String => "string".into(),
-            Type::Unit => "()".into(),
-            Type::Boolean => "bool".into(),
-            Type::TypeVariable(id) => format!("'{id}"),
-            Type::Array(element_type, size) => format!("[{}; {size}]", element_type.display()),
+}
+pub fn resolve_type_variable_and_simplify(
+    id: TypeVariableId,
+    resolved_type_variables: &mut HashMap<TypeVariableId, Type>,
+) -> Option<&Type> {
+    fn aux(
+        id: TypeVariableId,
+        resolved_type_variables: &mut HashMap<TypeVariableId, Type>,
+        is_indirect: bool,
+    ) -> Option<&Type> {
+        match resolved_type_variables.get(&id) {
+            Some(Type::TypeVariable(id)) => aux(*id, resolved_type_variables, true),
+            Some(r#type) => {
+                if is_indirect {
+                    resolved_type_variables.insert(id, r#type.clone());
+                }
+                Some(resolved_type_variables.get(&id).unwrap()) // PERF I think this could be made
+                // unchecked / this whole function could be more optimized
+            }
+            None => None,
         }
     }
+    aux(id, resolved_type_variables, false)
+}
+pub fn resolve_generic<'a>(
+    id: GenericId,
+    resolved_type_variables: &'a HashMap<TypeVariableId, Type>,
+    resolved_generics: &'a HashMap<GenericId, Type>,
+) -> Option<&'a Type> {
+    match resolved_generics.get(&id) {
+        Some(Type::TypeVariable(id)) => resolve_type_variable(*id, resolved_type_variables),
+        Some(Type::Generic(id)) => resolve_generic(*id, resolved_type_variables, resolved_generics),
+        Some(r#type) => Some(r#type),
+        None => None,
+    }
+}
+pub fn resolve_generic_and_simplify<'a>(
+    id: GenericId,
+    resolved_type_variables: &'a mut HashMap<TypeVariableId, Type>,
+    resolved_generics: &'a mut HashMap<GenericId, Type>,
+) -> Option<&'a Type> {
+    fn aux<'a>(
+        id: GenericId,
+        resolved_type_variables: &'a mut HashMap<TypeVariableId, Type>,
+        resolved_generics: &'a mut HashMap<GenericId, Type>,
+        is_indirect: bool,
+    ) -> Option<&'a Type> {
+        match resolved_generics.get(&id) {
+            Some(Type::TypeVariable(id)) => {
+                resolve_type_variable_and_simplify(*id, resolved_type_variables)
+            }
+            Some(Type::Generic(id)) => {
+                resolve_generic(*id, resolved_type_variables, resolved_generics)
+            }
+            Some(r#type) => {
+                if is_indirect {
+                    resolved_generics.insert(id, r#type.clone());
+                }
+                Some(resolved_generics.get(&id).unwrap()) // PERF I think this could be made
+                // unchecked / this whole function could be more optimized
+            }
+            None => None,
+        }
+    }
+    aux(id, resolved_type_variables, resolved_generics, false)
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -131,8 +373,41 @@ pub enum Type {
     String,
     Unit,
     Boolean,
-    TypeVariable(usize),
+    TypeVariable(TypeVariableId),
+    Generic(GenericId),
     Array(Box<Type>, usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TypeVariableId(usize);
+
+impl Deref for TypeVariableId {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for TypeVariableId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GenericId(usize);
+
+impl Deref for GenericId {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for GenericId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 #[derive(Debug, PartialEq)]
